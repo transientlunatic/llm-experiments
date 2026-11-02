@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "igor"
+version = "0.1.0"
+description = "Igor: run local LLMs (Ollama) as HTCondor jobs, with multi-model paper review"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["click>=8"]
+
+[project.scripts]
+igor = "igor.cli:main"
+
+[tool.setuptools]
+packages = ["igor"]
+
+[tool.setuptools.package-data]
+igor = ["worker/*.py", "data/*", "data/prompts/*"]

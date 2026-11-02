@@ -1,7 +1,8 @@
 runs/
-logs/*
-!logs/.gitkeep
-prompts.jsonl
-results.jsonl
-*.pdf
+logs/
 __pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+*.pdf
