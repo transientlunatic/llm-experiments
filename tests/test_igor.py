@@ -53,6 +53,8 @@ class CliTest(unittest.TestCase):
         self.assertIn("job.sh", sub)
         self.assertIn("claim_findings.md", sub)
         self.assertIn("reviews/review_1.md", sub)
+        self.assertIn("ref_rating.txt", sub)
+        self.assertEqual(json.loads((run / "spec_R1.json").read_text())["ref_prompt"], "ref_rating.txt")
         self.assertIn("require_gpus", sub)
         # worker scripts referenced by absolute path actually exist
         for line in sub.splitlines():

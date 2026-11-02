@@ -128,7 +128,7 @@ def build(doc, *, name=None, out_dir="runs", n=3, personas=DEFAULT_PERSONAS, vra
         dag += ["JOB C claims.sub", f"SCRIPT POST C /bin/sh {condor.DAG_POST}"]
 
     for node, rs in nodes.items():
-        spec = {"doc": "doc.txt", "prompt": prompt.name, "num_ctx": rs[0]["ctx"], "max_out": 2500,
+        spec = {"doc": "doc.txt", "prompt": prompt.name, "ref_prompt": "ref_rating.txt", "num_ctx": rs[0]["ctx"], "max_out": 2500,
                 "evidence": "claim_findings.md" if claims_cfg else None,
                 "jobs": [{"focus_file": f"focus_{r['id']}.txt", "out": f"review_{r['id']}.md"} for r in rs]}
         (run / f"spec_{node}.json").write_text(json.dumps(spec, indent=2))
@@ -136,7 +136,7 @@ def build(doc, *, name=None, out_dir="runs", n=3, personas=DEFAULT_PERSONAS, vra
             (run / f"focus_{r['id']}.txt").write_text(r["persona_text"] + "\n")
         remaps = {f"review_{r['id']}.md": f"reviews/review_{r['id']}.md" for r in rs}
         remaps["ollama-server.log"] = f"logs/ollama-server_{node}.log"
-        inputs = ([WORKER / f for f in ("run_panel.py", "review_pdf.py")] + _client_files() + [prompt, "doc.txt", f"spec_{node}.json"]
+        inputs = ([WORKER / f for f in ("run_panel.py", "review_pdf.py")] + _client_files() + [prompt, DATA / "prompts" / "ref_rating.txt", "doc.txt", f"spec_{node}.json"]
                   + [f"focus_{r['id']}.txt" for r in rs] + (["claim_findings.md"] if claims_cfg else []))
         (run / f"referee_{node}.sub").write_text(condor.sub(
             model=rs[0]["model"], command=["python3", "run_panel.py", f"spec_{node}.json"], name=f"referee_{node}",

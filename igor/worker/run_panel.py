@@ -16,7 +16,7 @@ ok = 0
 for j in spec["jobs"]:
     try:
         review_pdf.run(spec["doc"], spec["prompt"], j.get("focus_file"), spec.get("evidence"), j["out"],
-                       spec["num_ctx"], spec.get("max_out", 3000), text=text)
+                       spec["num_ctx"], spec.get("max_out", 3000), text=text, ref_prompt=spec.get("ref_prompt"))
         ok += 1
     except BaseException:
         traceback.print_exc()
