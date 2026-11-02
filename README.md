@@ -4,7 +4,7 @@ Run local LLMs (Ollama) as HTCondor GPU jobs, with no root, containers or shared
 
 Each worker downloads the standalone Ollama release and the model weights into a **node-local cache**
 (`/tmp/$USER-llm-cache`, override with `LLM_CACHE`), so only the first job per node is slow.
-Workers need outbound internet, `curl`, `python3` and `flock`; `zstd` is optional (falls back to `pip install --user zstandard`).
+Workers need outbound internet, `curl`, `python3` and `flock`; `zstd` is optional (falls back to `pip install --target` of `zstandard` into the cache).
 Pin a release with `OLLAMA_VERSION=v0.x.y`, or use a local install with `OLLAMA_BIN=$(which ollama)` (e.g. laptop minicondor).
 
 ## Batch

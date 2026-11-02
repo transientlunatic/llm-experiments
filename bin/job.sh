@@ -38,8 +38,12 @@ else
       if command -v zstd >/dev/null; then
         curl -fsSL "$URL" | zstd -dc | tar -x -C "$DIR.part"
       else
-        python3 -m pip install --user -q zstandard >&2
-        curl -fsSL "$URL" | python3 -c '
+        # --target sidesteps PEP 668 "externally-managed-environment" errors; fall back if pip still objects
+        PYLIB="$CACHE/pylib"
+        python3 -c "import sys; sys.path.insert(0,'$PYLIB'); import zstandard" 2>/dev/null || \
+          python3 -m pip install -q --target "$PYLIB" zstandard >&2 || \
+          python3 -m pip install -q --target "$PYLIB" --break-system-packages zstandard >&2
+        curl -fsSL "$URL" | PYTHONPATH="$PYLIB" python3 -c '
 import sys, zstandard
 zstandard.ZstdDecompressor().copy_stream(sys.stdin.buffer, sys.stdout.buffer)' | tar -x -C "$DIR.part"
       fi
