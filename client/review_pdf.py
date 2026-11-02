@@ -58,10 +58,13 @@ def chunk(text, budget_tokens):
         cur += para + "\n\n"
     return parts + ([cur] if cur.strip() else [])
 
+def _int(v):  # tolerate trailing "# comment" that Condor passes through verbatim
+    return int(v.split("#")[0].strip())
+
 ap = argparse.ArgumentParser()
 ap.add_argument("doc"); ap.add_argument("--prompt", default="prompts/review.txt")
-ap.add_argument("--out", default="review.md"); ap.add_argument("--num-ctx", type=int, default=32768)
-ap.add_argument("--images", type=int, default=0, help="attach first N pages as images (vision model only)")
+ap.add_argument("--out", default="review.md"); ap.add_argument("--num-ctx", type=_int, default=32768)
+ap.add_argument("--images", type=_int, default=0, help="attach first N pages as images (vision model only)")
 a = ap.parse_args()
 
 instr = open(a.prompt).read().strip()
