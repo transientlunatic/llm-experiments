@@ -9,7 +9,6 @@ universe                = vanilla
 executable              = bin/job.sh
 arguments               = $(MODEL) python3 review_pdf.py $(PDF) --prompt review.txt --out review.md --num-ctx $(NUM_CTX)
 transfer_input_files    = client/review_pdf.py, prompts/review.txt, $(PDF)
-transfer_output_files   = review.md, ollama-server.log
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 

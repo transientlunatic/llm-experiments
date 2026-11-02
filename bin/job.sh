@@ -54,7 +54,12 @@ export OLLAMA_HOST="127.0.0.1:$PORT" OLLAMA_MODEL="$MODEL" OLLAMA_MODELS="$CACHE
 echo "[job] host=$(hostname -f) port=$PORT model=$MODEL gpu=${CUDA_VISIBLE_DEVICES:-?}" >&2
 "$BIN" serve >"$SCRATCH/ollama-server.log" 2>&1 &
 SERVER=$!
-trap 'kill $SERVER 2>/dev/null || true; wait $SERVER 2>/dev/null || true' EXIT
+cleanup() {
+  rc=$?
+  [ $rc -ne 0 ] && { echo "[job] FAILED (exit $rc); tail of ollama-server.log:" >&2; tail -n 40 "$SCRATCH/ollama-server.log" >&2 || true; }
+  kill $SERVER 2>/dev/null || true; wait $SERVER 2>/dev/null || true
+}
+trap cleanup EXIT
 
 for _ in $(seq 120); do
   curl -sf "http://$OLLAMA_HOST/api/tags" >/dev/null && break
