@@ -1,4 +1,5 @@
-# Batch job: condor_submit ollama.sub  (edit MODEL / INPUT / MIN_VRAM_MB)
+# Batch job. Override defaults with -append (plain NAME=value arguments are NOT honoured):
+#   condor_submit ollama.sub -append 'MODEL=llama3.2:1b' -append 'INPUT=prompts.jsonl'
 MODEL       = llama3.1:8b
 INPUT       = prompts.jsonl
 MIN_VRAM_MB = 16000

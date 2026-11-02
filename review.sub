@@ -1,4 +1,6 @@
-# Review a PDF: condor_submit review.sub PDF=/path/to/paper.pdf   (file must exist; any path works)
+# Review a PDF. Override the defaults below with -append (plain NAME=value arguments are NOT honoured):
+#   condor_submit review.sub -append 'PDF=/path/to/paper.pdf' -append 'MODEL=llama3.2:3b' -append 'NUM_CTX=8192'
+# The PDF must exist on the submit host; any path works.
 # Use a bigger model for better reviews, e.g. MODEL=qwen2.5:32b with MIN_VRAM_MB=30000.
 PDF         = paper.pdf
 MODEL       = llama3.1:8b

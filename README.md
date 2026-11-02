@@ -10,14 +10,14 @@ Pin a release with `OLLAMA_VERSION=v0.x.y`, or use a local install with `OLLAMA_
 ## Batch
 ```bash
 cp prompts.example.jsonl prompts.jsonl
-condor_submit ollama.sub          # edit MODEL / MIN_VRAM_MB at the top
+condor_submit ollama.sub -append 'MODEL=llama3.2:1b'    # or edit the defaults at the top
 ```
 `bin/job.sh MODEL CMD...` starts `ollama serve` on a random free port, pulls the model, runs
 `CMD` with `OLLAMA_HOST` and `OLLAMA_MODEL` set, then shuts the server down.
 
 ## Review a PDF
 ```bash
-condor_submit review.sub PDF=paper.pdf MODEL=llama3.1:8b     # result: review.md
+condor_submit review.sub -append 'PDF=paper.pdf' -append 'MODEL=llama3.1:8b'    # result: review.md
 ```
 `client/review_pdf.py` extracts text (`pdftotext`, else `pypdf`), sets a large `num_ctx`
 (Ollama's default silently truncates long input), and map-reduces over chunks if the paper doesn't fit.

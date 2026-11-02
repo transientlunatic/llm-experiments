@@ -1,4 +1,5 @@
-# Long-running server for interactive play: condor_submit serve.sub
+# Long-running server for interactive play:
+#   condor_submit serve.sub -append 'MODEL=llama3.2:1b'
 # Then: condor_tail -stderr <jobid>  to see host:port, and ssh-tunnel to it.
 MODEL       = llama3.1:8b
 MIN_VRAM_MB = 16000
