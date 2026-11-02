@@ -1,14 +1,14 @@
 {
-  "_comment": "Catalogue used by bin/plan_review.py. Sizes are APPROXIMATE (Q4 default Ollama tags); kv_mb_per_1k is the fp16 KV-cache cost per 1000 tokens of context; quality is a subjective 1-10 rank for review tasks. Edit freely; check tags with `ollama list`/the Ollama library.",
+  "_comment": "tools=true marks models believed to support Ollama tool calling (needed for claim checking; verify on the model page). Catalogue used by bin/plan_review.py. Sizes are APPROXIMATE (Q4 default Ollama tags); kv_mb_per_1k is the fp16 KV-cache cost per 1000 tokens of context; quality is a subjective 1-10 rank for review tasks. Edit freely; check tags with `ollama list`/the Ollama library.",
   "models": [
-    {"name": "qwen2.5:32b",    "family": "qwen",    "weights_mb": 19800, "kv_mb_per_1k": 270, "max_ctx": 32768, "quality": 8},
+    {"name": "qwen2.5:32b", "tools": true,    "family": "qwen",    "weights_mb": 19800, "kv_mb_per_1k": 270, "max_ctx": 32768, "quality": 8},
     {"name": "gemma3:27b",     "family": "gemma",   "weights_mb": 17400, "kv_mb_per_1k": 400, "max_ctx": 32768, "quality": 8},
     {"name": "phi4:14b",       "family": "phi",     "weights_mb": 9100,  "kv_mb_per_1k": 220, "max_ctx": 16384, "quality": 7},
-    {"name": "qwen2.5:14b",    "family": "qwen",    "weights_mb": 9000,  "kv_mb_per_1k": 200, "max_ctx": 32768, "quality": 7},
+    {"name": "qwen2.5:14b", "tools": true,    "family": "qwen",    "weights_mb": 9000,  "kv_mb_per_1k": 200, "max_ctx": 32768, "quality": 7},
     {"name": "gemma3:12b",     "family": "gemma",   "weights_mb": 8100,  "kv_mb_per_1k": 250, "max_ctx": 32768, "quality": 7},
-    {"name": "mistral-nemo:12b","family": "mistral","weights_mb": 7100,  "kv_mb_per_1k": 165, "max_ctx": 32768, "quality": 6},
-    {"name": "llama3.1:8b",    "family": "llama",   "weights_mb": 4900,  "kv_mb_per_1k": 130, "max_ctx": 32768, "quality": 5},
-    {"name": "qwen2.5:7b",     "family": "qwen",    "weights_mb": 4700,  "kv_mb_per_1k": 60,  "max_ctx": 32768, "quality": 5},
-    {"name": "llama3.2:3b",    "family": "llama",   "weights_mb": 2000,  "kv_mb_per_1k": 115, "max_ctx": 32768, "quality": 3}
+    {"name": "mistral-nemo:12b", "tools": true,"family": "mistral","weights_mb": 7100,  "kv_mb_per_1k": 165, "max_ctx": 32768, "quality": 6},
+    {"name": "llama3.1:8b", "tools": true,    "family": "llama",   "weights_mb": 4900,  "kv_mb_per_1k": 130, "max_ctx": 32768, "quality": 5},
+    {"name": "qwen2.5:7b", "tools": true,     "family": "qwen",    "weights_mb": 4700,  "kv_mb_per_1k": 60,  "max_ctx": 32768, "quality": 5},
+    {"name": "llama3.2:3b", "tools": true,    "family": "llama",   "weights_mb": 2000,  "kv_mb_per_1k": 115, "max_ctx": 32768, "quality": 3}
   ]
 }

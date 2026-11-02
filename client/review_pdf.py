@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Review one document with a local Ollama model (one 'referee').
 
-  review_pdf.py DOC [--prompt P] [--focus-file F] [--out review.md] [--num-ctx 32768]
-                [--max-out 3000] [--images N] [--raw]
+  review_pdf.py DOC [--prompt P] [--focus-file F] [--evidence claim_findings.md] [--out review.md]
+                [--num-ctx 32768] [--max-out 3000] [--images N] [--raw]
 DOC may be .pdf, .txt, .tex or an arXiv source tarball (see doc.py). If the text doesn't fit
 in the context window it is split into chunks, each is reviewed, and the partial reviews are
 merged (in several stages if they don't fit in one window either).
 """
-import argparse, base64, glob, shutil, subprocess, sys, tempfile
+import argparse, base64, glob, os, shutil, subprocess, sys, tempfile
 from doc import load_document, est_tokens, chunk, TOK_CHARS
 from oclient import chat
 
@@ -53,34 +53,42 @@ def merge_reviews(parts, instr, ctx, max_out):
     return parts[0]
 
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("doc"); ap.add_argument("--prompt", default="prompts/review.txt")
-    ap.add_argument("--focus-file"); ap.add_argument("--out", default="review.md")
-    ap.add_argument("--num-ctx", type=_int, default=32768); ap.add_argument("--max-out", type=_int, default=3000)
-    ap.add_argument("--images", type=_int, default=0, help="attach first N pages as images (vision model only)")
-    ap.add_argument("--raw", action="store_true", help="don't clean LaTeX")
-    a = ap.parse_args()
-
-    instr = open(a.prompt).read().strip()
-    if a.focus_file:
-        instr += "\n\n" + open(a.focus_file).read().strip()
-    text = load_document(a.doc, raw=a.raw)
-    print(f"[review] {len(text)} chars (~{est_tokens(text)} tokens), num_ctx={a.num_ctx}", file=sys.stderr)
+def run(doc, prompt, focus_file=None, evidence=None, out="review.md", num_ctx=32768, max_out=3000,
+        images=0, raw=False, text=None):
+    """Review `doc` (or pre-loaded `text`) once; write the review to `out`."""
+    instr = open(prompt).read().strip()
+    if focus_file:
+        instr += "\n\n" + open(focus_file).read().strip()
+    if evidence and os.path.exists(evidence) and os.path.getsize(evidence) > 0:
+        instr += ("\n\nAUTOMATED CLAIM-CHECK FINDINGS (produced by tools; they can be wrong, but where relevant "
+                  "discuss them and say whether you agree):\n" + open(evidence).read().strip())
+    if text is None:
+        text = load_document(doc, raw=raw)
+    print(f"[review] {len(text)} chars (~{est_tokens(text)} tokens), num_ctx={num_ctx}", file=sys.stderr)
     if len(text.strip()) < 200:
         sys.exit("almost no text extracted (scanned PDF?) -- try --images with a vision model")
-    imgs = render_pages(a.doc, a.images) if a.images else None
-
-    budget = a.num_ctx - a.max_out - est_tokens(instr) - 500
+    imgs = render_pages(doc, images) if images else None
+    budget = num_ctx - max_out - est_tokens(instr) - 500
     if est_tokens(text) <= budget:
-        review = chat(f"{instr}\n\n--- DOCUMENT ---\n{text}", imgs, num_ctx=a.num_ctx, num_predict=a.max_out)
+        review = chat(f"{instr}\n\n--- DOCUMENT ---\n{text}", imgs, num_ctx=num_ctx, num_predict=max_out)
     else:
         parts = chunk(text, budget)
         print(f"[review] too long for one pass: {len(parts)} chunks", file=sys.stderr)
         partial = [chat(f"{instr}\n\nThis is part {i}/{len(parts)} of the document; review only this part.\n\n"
                         f"--- DOCUMENT PART {i} ---\n{p}", imgs if i == 1 else None,
-                        num_ctx=a.num_ctx, num_predict=a.max_out)
+                        num_ctx=num_ctx, num_predict=max_out)
                    for i, p in enumerate(parts, 1)]
-        review = merge_reviews(partial, instr, a.num_ctx, a.max_out)
-    open(a.out, "w").write(review + "\n")
-    print(f"[review] wrote {a.out}", file=sys.stderr)
+        review = merge_reviews(partial, instr, num_ctx, max_out)
+    open(out, "w").write(review + "\n")
+    print(f"[review] wrote {out}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("doc"); ap.add_argument("--prompt", default="prompts/review.txt")
+    ap.add_argument("--focus-file"); ap.add_argument("--evidence"); ap.add_argument("--out", default="review.md")
+    ap.add_argument("--num-ctx", type=_int, default=32768); ap.add_argument("--max-out", type=_int, default=3000)
+    ap.add_argument("--images", type=_int, default=0, help="attach first N pages as images (vision model only)")
+    ap.add_argument("--raw", action="store_true", help="don't clean LaTeX")
+    a = ap.parse_args()
+    run(a.doc, a.prompt, a.focus_file, a.evidence, a.out, a.num_ctx, a.max_out, a.images, a.raw)

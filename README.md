@@ -45,28 +45,35 @@ Batch jobs exit on their own when the command finishes.
 - `request_disk` must cover model weights in the cache if the node has little `/tmp` space.
 - Untested on the cluster. The bundled CUDA libraries must be compatible with the worker's NVIDIA driver.
 
-## Multi-referee review (planner + DAG)
+## Multi-referee review (claims -> models x personas -> editor)
 ```bash
-bin/plan_review.py 2401.08709 --n 3 --vram 23000     # paper: .pdf, .tex, .txt or an arXiv source tarball
+bin/plan_review.py 2401.08709 --n 3 --personas neutral,hostile,supportive --vram 23000
 cd runs/2401.08709 && condor_submit_dag -f review.dag
 ```
-`plan_review.py` cleans the document once (LaTeX: inlines `\input`s, strips comments, bibliography, TikZ
-and the author block), estimates its size, and picks a **panel from `config/models.json`**:
-models that fit the `--vram` budget at the context needed, from *different families* where possible,
-preferring single-pass reading over chunking, each given a different focus (statistics / novelty /
-technical correctness). It prints the plan and writes a DAG: referees run in parallel on separate GPUs,
-then an **editor** node (a DAG FINAL node, so it still runs if a referee fails) writes `report.md`:
-verdict, consensus, disagreements, a prioritised action list tagged by referee, and all referee reports.
-- `--vram 31000` also allows the 5090 and bigger models; `--submit` submits straight away.
-- Edit `config/models.json` (sizes/quality are rough estimates; check tags exist with the Ollama library).
-- Logs and server logs land in `runs/<name>/logs/`; reports in `runs/<name>/reviews/` and `report.md`.
-- Untested on the cluster: DAG semantics (`FINAL`, `transfer_output_remaps`, directory transfer) are the thing to check first.
+Paper: `.pdf`, `.tex`, `.txt` or an arXiv source tarball. `plan_review.py` cleans the document once (LaTeX: inlines
+`\input`s, strips comments, bibliography, TikZ and the author block; keeps the reference list in `refs.txt`),
+estimates its size and picks a **panel of N models** from `config/models.json` that fit the `--vram` budget at the
+context needed (different families where possible, single pass preferred). **Every persona runs on every model**
+(`neutral, hostile, supportive, pedantic`; hostile must quote its criticisms and may not invent flaws), so model
+effects can be separated from stance effects. DAG:
 
-### Personas and REF ratings
-Each referee gets a stance (default order: `neutral, hostile, supportive, pedantic`, cycled) on top of its
-focus; choose with `--personas hostile,hostile,neutral`. The hostile stance must back every criticism with
-a quote and may not invent flaws. Every review ends with a `REF_ASSESSMENT` block (originality / significance /
-rigour on 0-4, plus a probability distribution over 4*/3*/2*/1*/U). `editor.py` parses these and computes the
-rating table and an equal-weight mixture in code (the editor model does not write the numbers); see
-"Estimated REF ratings" in `report.md`. LLM ratings are poorly calibrated -- read the spread, not the mean.
-The rubric lives in `prompts/review.txt` (REF 2021 criteria; edit it if you want different ones).
+    CLAIMS  ->  one node per model (all personas, one model load)  ->  FINAL editor -> report.md
+
+`--split` makes one node per (model, persona); `--no-claims` skips claim checking; `--submit` submits directly.
+
+**Claim checking** (`client/claims.py`, a tool-capable model e.g. qwen2.5): extracts checkable claims as JSON
+(quotes must occur verbatim in the paper, otherwise dropped), then verifies each with a small type-specific tool set
+via Ollama tool calling: `search_paper`, `python_calc` (arithmetic only -- a restricted AST evaluator, *no* model-written
+code is executed), `get_reference_entry` (the paper's own bibliography), `lookup_reference` (Crossref + arXiv; workers
+need outbound internet). Verdicts: supported / partly_supported / contradicted / unverifiable, with evidence. The findings
+go into every referee prompt and the editor prompt. The claims node's POST script never fails the workflow: if it
+produces nothing, referees run without findings. Empirical claims (convergence, figure contents) are mostly
+`unverifiable` without data/code; lookups are fuzzy, so citation checks often need judgement.
+
+**REF ratings**: each review ends with a `REF_ASSESSMENT` block (originality / significance / rigour 0-4 and a probability
+distribution over 4*/3*/2*/1*/U). `editor.py` parses these and computes, in code, the per-referee table, the panel mixture
+and an expected-stars **model x stance matrix** (see `report.md`). LLM ratings are poorly calibrated -- read the spread.
+Rubric: `prompts/review.txt` (REF 2021 criteria).
+
+Notes: logs in `runs/<name>/logs/`, reviews in `runs/<name>/reviews/`, final `report.md` in the run dir. The DAG mechanics
+(`FINAL`, POST script, `transfer_output_remaps`, directory transfer) are untested on a real pool -- check those first.

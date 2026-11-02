@@ -59,9 +59,34 @@ def ref_table(refs, meta):
     return "\n".join(lines), bool(dists)
 
 
+def ref_matrix(refs, meta):
+    """Expected stars by model (rows) x persona (columns): separates model effects from persona effects."""
+    ids = [i for i in refs if refs[i] and refs[i]["dist"] and i in meta]
+    models = sorted({meta[i]["model"] for i in ids}); pers = []
+    for i in sorted(ids):
+        if meta[i]["persona"] not in pers:
+            pers.append(meta[i]["persona"])
+    if len(models) < 1 or len(pers) < 2:
+        return ""
+    cell = {(meta[i]["model"], meta[i]["persona"]): sum(VAL[k] * refs[i]["dist"][k] for k in STARS) for i in ids}
+    rows = ["| model \\ stance | " + " | ".join(pers) + " | mean |", "|---|" + "---|" * (len(pers) + 1)]
+    for m in models:
+        v = [cell.get((m, p)) for p in pers]
+        got = [x for x in v if x is not None]
+        rows.append(f"| `{m}` | " + " | ".join(f"{x:.2f}" if x is not None else "n/a" for x in v) +
+                    f" | {sum(got)/len(got):.2f} |" if got else "")
+    means = []
+    for p in pers:
+        v = [cell[(m, p)] for m in models if (m, p) in cell]
+        means.append(f"{sum(v)/len(v):.2f}" if v else "n/a")
+    rows.append("| **mean** | " + " | ".join(means) + " | |")
+    return "\n".join(rows)
+
+
 ap = argparse.ArgumentParser()
 ap.add_argument("--reviews", default="reviews"); ap.add_argument("--plan", default="plan.json")
 ap.add_argument("--prompt", default="editor.txt"); ap.add_argument("--out", default="report.md")
+ap.add_argument("--findings", default="claim_findings.md")
 ap.add_argument("--num-ctx", type=int, default=16384); ap.add_argument("--max-out", type=int, default=4000)
 a = ap.parse_args()
 
@@ -76,7 +101,7 @@ if not reviews:
     sys.exit("no referee reviews were produced; nothing to summarise")
 
 instr = open(a.prompt).read().strip()
-budget = a.num_ctx - a.max_out - est_tokens(instr) - 1200
+budget = a.num_ctx - a.max_out - est_tokens(instr) - 4500   # room for REF table + claim findings
 share = budget // len(reviews)
 blocks = []
 for i, r in sorted(reviews.items()):
@@ -88,8 +113,15 @@ for i, r in sorted(reviews.items()):
 refs = {i: parse_ref(r) for i, r in reviews.items()}
 table, have_ref = ref_table(refs, meta)
 ref_note = ("\n\nREF RATING TABLE (computed from the referees' own ratings; LLM ratings are poorly calibrated):\n" + table) if have_ref else ""
+findings = open(a.findings).read().strip() if os.path.exists(a.findings) else ""
+find_note = ""
+if findings:
+    cap = 3000
+    if est_tokens(findings) > cap:
+        findings = findings[:int(cap * TOK_CHARS)] + "\n[truncated]"
+    find_note = "\n\nCLAIM VERIFICATION FINDINGS (automated tools; treat 'contradicted' items as high priority but verify against what referees quote):\n" + findings
 note = f"\n\nNOTE: referee(s) {missing} failed to produce a review." if missing else ""
-summary = chat(f"{instr}{note}{ref_note}\n\n" + "\n\n".join(blocks), num_ctx=a.num_ctx, num_predict=a.max_out)
+summary = chat(f"{instr}{note}{ref_note}{find_note}\n\n" + "\n\n".join(blocks), num_ctx=a.num_ctx, num_predict=a.max_out)
 
 with open(a.out, "w") as f:
     f.write(f"# Review report\n\n## Editor's summary\n\n{summary}\n\n## Panel\n\n")
@@ -99,6 +131,11 @@ with open(a.out, "w") as f:
     f.write("\n## Estimated REF ratings\n\n" + (table if have_ref else "No referee produced a parsable REF_ASSESSMENT block.") +
             "\n\n_Ratings are the models' own estimates; small local models are poorly calibrated and personas shift "
             "their rating (hostile rates low, supportive high), so read the spread, not the mean._\n")
+    mx = ref_matrix(refs, meta)
+    if mx:
+        f.write("\n### Expected stars: model x stance\n\n" + mx + "\n")
+    if findings:
+        f.write("\n## Claim verification\n\n" + open(a.findings).read().strip().replace("# Claim verification", "", 1) + "\n")
     for i, r in sorted(reviews.items()):
         f.write(f"\n## Referee {i} report\n\n{r}\n")
 print(f"[editor] wrote {a.out}", file=sys.stderr)

@@ -126,26 +126,73 @@ def _main_tex(root):
     return max(full or mains, key=os.path.getsize)
 
 
+def _bib_to_text(bib):
+    """Crude .bib -> 'key: Authors. Title. Year.' lines (only used when no .bbl is available)."""
+    out = []
+    for m in re.finditer(r"@\w+\s*\{\s*([^,\s]+)\s*,(.*?)\n\}", bib, re.S):
+        def field(n):
+            f = re.search(n + r"\s*=\s*[{\"](.*?)[}\"]\s*(?:,|$)", m.group(2), re.S | re.I)
+            return " ".join(f.group(1).split()) if f else ""
+        out.append(f"{m.group(1)}: {field('author')}. {field('title')}. {field('journal') or field('booktitle')} {field('year')}.")
+    return "\n".join(out)
+
+
+def _tex_refs(main_text, root):
+    """Reference list text from a bundle: \\bibitem entries (.bbl or inline) or .bib files."""
+    chunks = []
+    for d, _, fs in os.walk(root):
+        for f in fs:
+            if f.endswith(".bbl"):
+                chunks.append(open(os.path.join(d, f), errors="replace").read())
+    m = re.search(r"\\begin\{thebibliography\}.*?\\end\{thebibliography\}", main_text, re.S)
+    if m:
+        chunks.append(m.group(0))
+    if not chunks:
+        for d, _, fs in os.walk(root):
+            for f in fs:
+                if f.endswith(".bib"):
+                    chunks.append(_bib_to_text(open(os.path.join(d, f), errors="replace").read()))
+    t = "\n\n".join(chunks)
+    t = re.sub(r"\\bibitem(\[[^\]]*\])?\s*\{([^}]*)\}", r"\n[\2] ", t)
+    t = re.sub(r"\\(newblock|begin\{thebibliography\}\{[^}]*\}|end\{thebibliography\})", " ", t)
+    return strip_comments(t).strip()
+
+
+def _pdf_refs(text):
+    """Text after the last 'References' heading, if it sits in the final 40% of the document."""
+    hits = [m.start() for m in re.finditer(r"(?im)^\s*(references|bibliography)\s*$", text)]
+    return text[hits[-1]:] if hits and hits[-1] > 0.6 * len(text) else ""
+
+
 # ---------------------------------------------------------------- entry point
 def load_document(path, raw=False):
+    return load_document_ex(path, raw)[0]
+
+
+def load_document_ex(path, raw=False):
+    """Return (clean_text, references_text). references_text may be empty."""
     with open(path, "rb") as f:
         head = f.read(4)
     roots, text = [os.path.dirname(os.path.abspath(path))], None
     if head == b"%PDF" or path.lower().endswith(".pdf"):
-        return pdf_text(path)
+        t = pdf_text(path)
+        return t, _pdf_refs(t)
+    refs = ""
     if tarfile.is_tarfile(path):
         d = tempfile.mkdtemp()
         with tarfile.open(path) as tf:
             _safe_extract(tf, d)
         main = _main_tex(d)
         roots, text = [os.path.dirname(main), d], open(main, errors="replace").read()
+        refs = _tex_refs(inline_inputs(strip_comments(text), [os.path.dirname(main), d]), d)
     elif head[:2] == b"\x1f\x8b":
         text = gzip.open(path).read().decode(errors="replace")
     else:
         text = open(path, errors="replace").read()
     if raw or not ("\\documentclass" in text or "\\begin{document}" in text):
-        return text
-    return clean_latex(inline_inputs(strip_comments(text), roots))
+        return text, refs or _pdf_refs(text)
+    full = inline_inputs(strip_comments(text), roots)
+    return clean_latex(full), refs or _tex_refs(full, roots[0])
 
 
 def chunk(text, budget_tokens):

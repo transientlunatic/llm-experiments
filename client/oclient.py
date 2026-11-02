@@ -24,3 +24,24 @@ def chat(content, images=None, *, num_ctx, num_predict=3000, temperature=0.2):
     if out.get("done_reason") == "length":
         print("[oclient] WARNING: output hit num_predict limit", file=sys.stderr)
     return strip_think(out["message"]["content"])
+
+
+def chat_messages(messages, tools=None, fmt=None, *, num_ctx, num_predict=2000, temperature=0.1):
+    """Low-level chat with an arbitrary message list; returns the assistant message dict
+    (which may contain tool_calls). `fmt` may be "json" to force JSON output."""
+    host = os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
+    payload = {"model": os.environ["OLLAMA_MODEL"], "stream": False, "messages": messages,
+               "options": {"num_ctx": num_ctx, "num_predict": num_predict, "temperature": temperature}}
+    if tools:
+        payload["tools"] = tools
+    if fmt:
+        payload["format"] = fmt
+    req = urllib.request.Request(f"http://{host}/api/chat", json.dumps(payload).encode(),
+                                 {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=3600) as r:
+        out = json.load(r)
+    if out.get("prompt_eval_count", 0) >= num_ctx - 8:
+        print(f"[oclient] WARNING: prompt used {out['prompt_eval_count']}/{num_ctx} tokens -- likely truncated", file=sys.stderr)
+    msg = out["message"]
+    msg["content"] = strip_think(msg.get("content") or "")
+    return msg
