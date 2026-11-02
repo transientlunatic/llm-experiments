@@ -64,8 +64,9 @@ effects can be separated from stance effects. DAG:
 **Claim checking** (`client/claims.py`, a tool-capable model e.g. qwen2.5): extracts checkable claims as JSON
 (quotes must occur verbatim in the paper, otherwise dropped), then verifies each with a small type-specific tool set
 via Ollama tool calling: `search_paper`, `python_calc` (arithmetic only -- a restricted AST evaluator, *no* model-written
-code is executed), `get_reference_entry` (the paper's own bibliography), `lookup_reference` (Crossref + arXiv; workers
-need outbound internet). Verdicts: supported / partly_supported / contradicted / unverifiable, with evidence. The findings
+code is executed), `get_reference_entry` (the paper's own bibliography), `lookup_reference` (**INSPIRE-HEP** by arXiv id / DOI /
+title+author, falling back to Crossref + arXiv; workers need outbound internet; every hit gets a title-similarity score
+and a "NO CLOSE MATCH" flag, so non-existent citations stand out). Verdicts: supported / partly_supported / contradicted / unverifiable, with evidence. The findings
 go into every referee prompt and the editor prompt. The claims node's POST script never fails the workflow: if it
 produces nothing, referees run without findings. Empirical claims (convergence, figure contents) are mostly
 `unverifiable` without data/code; lookups are fuzzy, so citation checks often need judgement.
@@ -88,7 +89,7 @@ workers in `client/tools.py`):
   directory, rlimits (CPU, memory, no file writes, no forking), hard timeout, output cap.
 - **Namespaces (self-tested at start-up):** user + mount namespaces with a `chroot` into a tiny tmpfs root (interpreter and
   libraries only -- no home, no job directory, no `/etc`, no paper), plus a network namespace for offline tools (no network
-  at all). The lookup worker keeps the host network but sees no files; it may only reach `api.crossref.org` and
+  at all). The lookup worker keeps the host network but sees no files; it may only reach `inspirehep.net`, `api.crossref.org` and
   `export.arxiv.org` over https, refuses redirects, caps response size and refuses XML with DTDs/entities.
 - **`--sandbox strict` (default)** refuses to run any tool unless the namespace stack works on that node (then the claims
   stage reports itself unavailable and referees run without findings). `--sandbox best-effort` accepts rlimits-only.

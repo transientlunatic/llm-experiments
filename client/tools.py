@@ -7,7 +7,8 @@ Each tool receives only the data it needs and has no side effects:
   python_calc        arithmetic via a restricted AST evaluator (no names, attributes, subscripts, comprehensions)
   search_paper       keyword search over the paper text passed in
   get_reference_entry / resolve_entry   look up entries in the bibliography text passed in
-  lookup             Crossref + arXiv for ONE bibliography entry (only tool that uses the network;
+  lookup             INSPIRE-HEP (by arXiv id / DOI / title+author), falling back to Crossref + arXiv, for ONE
+                     bibliography entry (only tool that uses the network;
                      https only, fixed host allowlist, redirects refused, response size capped)
 """
 import ast, json, math, operator as op, re, sys, urllib.error, urllib.parse, urllib.request
@@ -97,7 +98,7 @@ def get_reference_entry(query, refs):
 
 
 # ------------------------------------------------------------------ network lookup (restricted)
-ALLOWED_HOSTS = {"api.crossref.org", "export.arxiv.org"}
+ALLOWED_HOSTS = {"inspirehep.net", "api.crossref.org", "export.arxiv.org"}
 MAX_BYTES = 300_000
 
 
@@ -115,14 +116,82 @@ def _fetch(url):
         return r.read(MAX_BYTES)
 
 
+_ARXIV_RE = re.compile(r"(?:arxiv:?\s*)?\b(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?\b", re.I)
+_DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s,;\"<>]+)", re.I)
+
+
+def _title_author(q):
+    """Heuristic title + first-author surname from a free-text bibliography entry."""
+    q = re.sub(r"^\s*\[[^\]]*\]\s*", "", q)
+    segs = [x.strip() for x in re.split(r"(?<=[a-z\)])\.\s+|\n", q) if x.strip()]
+    good = [x for x in segs if len(x.split()) >= 4 and sum(c.isdigit() for c in x) < 0.2 * len(x)]
+    title = max(good, key=len) if good else ""
+    first = segs[0] if segs else ""
+    names = re.findall(r"\b[A-Z][a-z]{2,}\b", re.split(r"\bet\b|\band\b", first)[0])
+    surname = (names[0] if "," in first else names[-1]) if names else ""
+    return title, surname
+
+
+def _inspire(query, titles):
+    d = json.loads(_fetch("https://inspirehep.net/api/literature?size=3&sort=bestmatch&q=" + urllib.parse.quote(query)
+                          + "&fields=titles,authors.full_name,arxiv_eprints,dois,publication_info,citation_count,earliest_date"))
+    out = []
+    for h in d["hits"]["hits"]:
+        m = h["metadata"]
+        au = [a["full_name"] for a in m.get("authors", [])]
+        au = ", ".join(au[:4]) + (" et al" if len(au) > 4 else "")
+        pub = "; ".join(" ".join(str(x) for x in (p.get("journal_title"), p.get("journal_volume"), p.get("artid") or p.get("page_start")) if x)
+                        for p in m.get("publication_info", []) if p.get("journal_title"))
+        ax = ",".join("arXiv:" + e["value"] for e in m.get("arxiv_eprints", []))
+        doi = ",".join("doi:" + x["value"] for x in m.get("dois", [])[:1])
+        out.append(f"[INSPIRE] {m['titles'][0]['title']} | {au} | {m.get('earliest_date','')} | {pub} | {ax} {doi} | cited {m.get('citation_count', '?')}x")
+        titles.append(m["titles"][0]["title"])
+    return out
+
+
+def _clean_entry(e):
+    e = re.sub(r"\\(newblock|em|emph|textit|textbf|bibinfo\{[^}]*\})\b", " ", e)
+    e = e.replace("~", " ")
+    e = re.sub(r"\\[A-Za-z]+\*?", " ", e)                 # any other control word
+    return re.sub(r"[{}]", "", e)
+
+
+def _sim(a, b):
+    """Word-overlap (Jaccard) between two titles, 0..1."""
+    wa, wb = _words(a), _words(b)
+    return len(wa & wb) / len(wa | wb) if wa and wb else 0.0
+
+
 def lookup(entry):
-    q = " ".join(entry.split())[:300]
+    q = " ".join(_clean_entry(entry).split())[:400]
     if not q:
         return "no reference entry to look up"
-    out = []
+    out, how, title = [], "", ""
+    try:
+        m_ax, m_doi = _ARXIV_RE.search(q), _DOI_RE.search(q)
+        queries = ([("arXiv id", "arxiv:" + m_ax.group(1))] if m_ax else []) + \
+                  ([("DOI", "doi:" + m_doi.group(1).rstrip(".)"))] if m_doi else [])
+        title, surname = _title_author(q)
+        titles = []
+        if title:
+            queries.append(("title+author", f't "{title[:200].replace(chr(34), "")}"' + (f" and a {surname}" if surname else "")))
+            queries.append(("title", "t " + title[:200].replace('"', "")))
+        for how, qq in queries:
+            titles = []
+            out = _inspire(qq, titles)
+            if out:
+                break
+        if out:
+            out.insert(0, f"(INSPIRE-HEP match by {how}; ranked by INSPIRE relevance; a single hit by id/DOI is definitive; check the title-sim score)")
+    except Exception as e:
+        out = [f"[INSPIRE] lookup failed: {type(e).__name__}"]
+    if len(out) > 1:
+        return _annotate(out, title)[:2500]
+    # fallback: Crossref + arXiv (INSPIRE has no record or was unavailable)
+    out = out[:1] + ["(no INSPIRE record found; falling back to Crossref/arXiv)"]
     try:
         d = json.loads(_fetch("https://api.crossref.org/works?rows=3&select=title,author,issued,DOI,abstract"
-                              "&query.bibliographic=" + urllib.parse.quote(q)))
+                              "&query.bibliographic=" + urllib.parse.quote(q[:300])))
         for it in d["message"]["items"]:
             au = ", ".join(a.get("family", "") for a in it.get("author", [])[:4])
             yr = (it.get("issued", {}).get("date-parts") or [[""]])[0][0]
@@ -132,12 +201,12 @@ def lookup(entry):
         out.append(f"[Crossref] lookup failed: {type(e).__name__}")
     try:
         words = []
-        for w in re.findall(r"[A-Za-z]{4,}", q):          # significant words only, AND-ed: a well-formed arXiv query
+        for w in re.findall(r"[A-Za-z]{4,}", q):
             if w.lower() not in words and w.lower() not in ("phys", "rev", "lett", "journal", "et", "al"):
                 words.append(w.lower())
         raw = _fetch("https://export.arxiv.org/api/query?max_results=3&search_query="
                      + "+AND+".join("all:" + urllib.parse.quote(w) for w in words[:10]))
-        if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:                    # refuse XML with DTDs/entities
+        if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
             raise ValueError("unexpected XML")
         ns = {"a": "http://www.w3.org/2005/Atom"}
         for e in ET.fromstring(raw).findall("a:entry", ns):
@@ -146,7 +215,24 @@ def lookup(entry):
             out.append(f"[arXiv] {g('title')} | {au} | {g('published')[:4]} | {g('id')} | {g('summary')[:250]}")
     except Exception as e:
         out.append(f"[arXiv] lookup failed: {type(e).__name__}")
-    return "\n".join(out)[:2500]
+    return _annotate(out, title)[:2500]
+
+
+def _annotate(lines, want_title):
+    """Append a title-similarity score to each hit and a summary verdict line."""
+    best, res = 0.0, []
+    for l in lines:
+        m = re.match(r"\[(INSPIRE|Crossref|arXiv)\] (.*?) \|", l)
+        if m and want_title:
+            sc = _sim(want_title, m.group(2))
+            best = max(best, sc)
+            l += f" | title-sim {sc:.2f}"
+        res.append(l)
+    if want_title:
+        verdict = ("strong title match" if best >= 0.7 else "weak/partial match" if best >= 0.4
+                   else "NO CLOSE MATCH -- the cited work may not exist as described")
+        res.insert(0, f"SUMMARY: best title similarity {best:.2f} ({verdict}) for \"{want_title[:100]}\"")
+    return "\n".join(res)
 
 
 # ------------------------------------------------------------------ worker entry point

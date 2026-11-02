@@ -10,7 +10,7 @@ Tools (no code execution; each call runs in its own sandboxed subprocess, see sa
   search_paper(query)         keyword search over the paper's paragraphs
   python_calc(expression)     arithmetic only: + - * / ** %, sqrt/log/log10/exp/sin/cos/tan/abs/round, pi, e
   get_reference_entry(query)  look up an entry in the paper's own reference list
-  lookup_reference(key)       Crossref + arXiv for one of the paper's own references (cite key only)
+  lookup_reference(key)       INSPIRE-HEP (then Crossref/arXiv) for one of the paper's own references (cite key only)
 Needs a model with tool support (e.g. qwen2.5, llama3.1). Always exits 0 and writes outputs, so a
 failure here never blocks the referees; the findings file then says verification was unavailable.
 """
@@ -59,7 +59,7 @@ SPECS = {
     "search_paper": (_spec("search_paper", "Search the paper's text; returns the most relevant passages.", "query", "keywords"), "query"),
     "python_calc": (_spec("python_calc", "Evaluate an arithmetic expression exactly (no variables; use numbers from the paper).", "expression", "e.g. sqrt(2*9.8)/3"), "expression"),
     "get_reference_entry": (_spec("get_reference_entry", "Find an entry in the paper's own reference list by cite key, number or words.", "query", "cite key or words"), "query"),
-    "lookup_reference": (_spec("lookup_reference", "Look up one of the paper's own bibliography entries in Crossref and arXiv, to check it exists and what it is. Takes the cite key or reference number only.", "key", "cite key or number, e.g. abbott2016"), "key"),
+    "lookup_reference": (_spec("lookup_reference", "Look up one of the paper's own bibliography entries in INSPIRE-HEP (falling back to Crossref/arXiv) to check it exists, who wrote it, where it was published and how often it is cited. Takes the cite key or reference number only.", "key", "cite key or number, e.g. abbott2016"), "key"),
 }
 TYPE_TOOLS = {"numerical": ["search_paper", "python_calc"],
               "citation": ["get_reference_entry", "lookup_reference", "search_paper"]}
