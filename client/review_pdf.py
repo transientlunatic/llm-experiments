@@ -1,43 +1,16 @@
 #!/usr/bin/env python3
-"""Review a document with a local Ollama model. Stdlib only (pdftotext/pypdf used if present).
+"""Review one document with a local Ollama model (one 'referee').
 
-  review_pdf.py paper.pdf [--prompt prompts/review.txt] [--out review.md]
-                [--num-ctx 32768] [--images N]
-Input may be .pdf, .txt or .tex (LaTeX source gives far better results for equations).
-Uses $OLLAMA_HOST / $OLLAMA_MODEL (set by bin/job.sh).
-If the text doesn't fit in the context window it is split into chunks, each chunk is
-reviewed, then the partial reviews are merged in a final pass.
+  review_pdf.py DOC [--prompt P] [--focus-file F] [--out review.md] [--num-ctx 32768]
+                [--max-out 3000] [--images N] [--raw]
+DOC may be .pdf, .txt, .tex or an arXiv source tarball (see doc.py). If the text doesn't fit
+in the context window it is split into chunks, each is reviewed, and the partial reviews are
+merged (in several stages if they don't fit in one window either).
 """
-import argparse, base64, glob, json, os, re, shutil, subprocess, sys, tempfile, urllib.request
+import argparse, base64, glob, shutil, subprocess, sys, tempfile
+from doc import load_document, est_tokens, chunk, TOK_CHARS
+from oclient import chat
 
-def import_pypdf():
-    """Import pypdf, installing it into the node-local cache (pip --target) if needed.
-    --target avoids PEP 668 'externally-managed-environment' errors on system Pythons."""
-    import importlib
-    lib = os.path.join(os.environ.get("LLM_CACHE", f"/tmp/{os.environ.get('USER') or subprocess.getoutput('id -un')}-llm-cache"), "pylib")
-    sys.path.insert(0, lib)
-    try:
-        import pypdf
-    except ImportError:
-        print(f"[review] no pdftotext; installing pypdf into {lib}", file=sys.stderr)
-        py = shutil.which("python3") or sys.executable or "python3"
-        for extra in ([], ["--break-system-packages"]):
-            if subprocess.run([py, "-m", "pip", "install", "-q", "--target", lib, *extra, "pypdf"]).returncode == 0:
-                break
-        else:
-            sys.exit("could not install pypdf; run pdftotext on the submit host and pass the .txt instead")
-        importlib.invalidate_caches()
-        import pypdf
-    return pypdf
-
-def extract_text(path):
-    if path.endswith((".txt", ".tex", ".md")):
-        return open(path, errors="replace").read()
-    if shutil.which("pdftotext"):
-        return subprocess.run(["pdftotext", "-layout", path, "-"], check=True,
-                              capture_output=True, text=True).stdout
-    pypdf = import_pypdf()
-    return "\n\n".join(p.extract_text() or "" for p in pypdf.PdfReader(path).pages)
 
 def render_pages(path, n):
     if not shutil.which("pdftoppm"):
@@ -46,62 +19,68 @@ def render_pages(path, n):
     subprocess.run(["pdftoppm", "-r", "100", "-png", "-l", str(n), path, f"{d}/p"], check=True)
     return [base64.b64encode(open(f, "rb").read()).decode() for f in sorted(glob.glob(f"{d}/p*.png"))]
 
-def chat(content, images=None, *, num_ctx, num_predict=4096):
-    host, model = os.environ.get("OLLAMA_HOST", "127.0.0.1:11434"), os.environ["OLLAMA_MODEL"]
-    msg = {"role": "user", "content": content}
-    if images:
-        msg["images"] = images
-    body = json.dumps({"model": model, "stream": False, "messages": [msg],
-                       "options": {"num_ctx": num_ctx, "num_predict": num_predict, "temperature": 0.2}}).encode()
-    req = urllib.request.Request(f"http://{host}/api/chat", body, {"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=3600) as r:
-        out = json.load(r)
-    used = out.get("prompt_eval_count", 0)
-    if used >= num_ctx - 8:
-        print(f"[review] WARNING: prompt used {used}/{num_ctx} tokens -- likely truncated", file=sys.stderr)
-    return out["message"]["content"]
 
-def chunk(text, budget_tokens):
-    """Split on blank lines into pieces of <= ~budget_tokens (4 chars ~ 1 token)."""
-    limit, parts, cur = budget_tokens * 4, [], ""
-    for para in re.split(r"\n\s*\n", text):
-        while len(para) > limit:                       # a single huge paragraph
-            if cur: parts.append(cur); cur = ""
-            parts.append(para[:limit]); para = para[limit:]
-        if len(cur) + len(para) + 2 > limit:
-            parts.append(cur); cur = ""
-        cur += para + "\n\n"
-    return parts + ([cur] if cur.strip() else [])
-
-def _int(v):  # tolerate trailing "# comment" that Condor passes through verbatim
+def _int(v):  # tolerate a trailing "# comment" that Condor passes through verbatim
     return int(v.split("#")[0].strip())
 
-ap = argparse.ArgumentParser()
-ap.add_argument("doc"); ap.add_argument("--prompt", default="prompts/review.txt")
-ap.add_argument("--out", default="review.md"); ap.add_argument("--num-ctx", type=_int, default=32768)
-ap.add_argument("--images", type=_int, default=0, help="attach first N pages as images (vision model only)")
-a = ap.parse_args()
 
-instr = open(a.prompt).read().strip()
-text = extract_text(a.doc)
-print(f"[review] {len(text)} chars (~{len(text)//4} tokens), num_ctx={a.num_ctx}", file=sys.stderr)
-if len(text.strip()) < 200:
-    sys.exit("almost no text extracted (scanned PDF?) -- try --images with a vision model")
-imgs = render_pages(a.doc, a.images) if a.images else None
+def merge_reviews(parts, instr, ctx, max_out):
+    """Merge partial reviews; if they don't fit one window, merge in groups first."""
+    budget = ctx - max_out - est_tokens(instr) - 800
+    while len(parts) > 1:
+        if sum(est_tokens(p) for p in parts) <= budget:
+            joined = "\n\n".join(f"### Partial review {i}\n{r}" for i, r in enumerate(parts, 1))
+            return chat(f"{instr}\n\nBelow are partial reviews of consecutive parts of one document. Merge them "
+                        f"into a single coherent review in the requested format, removing duplication.\n\n{joined}",
+                        num_ctx=ctx, num_predict=max_out)
+        groups, cur, cur_t = [], [], 0
+        for p in parts:
+            t = est_tokens(p)
+            if t > budget:
+                print("[review] WARNING: a partial review exceeds the context budget; truncating", file=sys.stderr)
+                p, t = p[:int(budget * TOK_CHARS)], budget
+            if cur and cur_t + t > budget:
+                groups.append(cur); cur, cur_t = [], 0
+            cur.append(p); cur_t += t
+        groups.append(cur)
+        if len(groups) == len(parts):     # nothing fits two-at-a-time: shrink so pairs fit
+            print("[review] WARNING: context too small to merge; truncating partials (use a larger --num-ctx)",
+                  file=sys.stderr)
+            parts = [p[:int(budget * TOK_CHARS / 2)] for p in parts]
+            continue
+        print(f"[review] merging {len(parts)} partials in {len(groups)} groups", file=sys.stderr)
+        parts = [g[0] if len(g) == 1 else merge_reviews(g, instr, ctx, max_out) for g in groups]
+    return parts[0]
 
-reserve = 4096 + len(instr) // 4 + 500                 # output + instructions + slack
-budget = a.num_ctx - reserve
-if len(text) // 4 <= budget:
-    review = chat(f"{instr}\n\n--- DOCUMENT ---\n{text}", imgs, num_ctx=a.num_ctx)
-else:
-    parts = chunk(text, budget)
-    print(f"[review] too long for one pass: {len(parts)} chunks", file=sys.stderr)
-    partial = [chat(f"{instr}\n\nThis is part {i}/{len(parts)} of the document; review only this part.\n\n"
-                    f"--- DOCUMENT PART {i} ---\n{p}", imgs if i == 1 else None, num_ctx=a.num_ctx)
-               for i, p in enumerate(parts, 1)]
-    merged = "\n\n".join(f"### Partial review {i}\n{r}" for i, r in enumerate(partial, 1))
-    review = chat(f"{instr}\n\nBelow are partial reviews of consecutive parts of one document. "
-                  f"Merge them into a single coherent review in the requested format, removing duplication.\n\n{merged}",
-                  num_ctx=a.num_ctx)
-open(a.out, "w").write(review + "\n")
-print(f"[review] wrote {a.out}", file=sys.stderr)
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("doc"); ap.add_argument("--prompt", default="prompts/review.txt")
+    ap.add_argument("--focus-file"); ap.add_argument("--out", default="review.md")
+    ap.add_argument("--num-ctx", type=_int, default=32768); ap.add_argument("--max-out", type=_int, default=3000)
+    ap.add_argument("--images", type=_int, default=0, help="attach first N pages as images (vision model only)")
+    ap.add_argument("--raw", action="store_true", help="don't clean LaTeX")
+    a = ap.parse_args()
+
+    instr = open(a.prompt).read().strip()
+    if a.focus_file:
+        instr += "\n\n" + open(a.focus_file).read().strip()
+    text = load_document(a.doc, raw=a.raw)
+    print(f"[review] {len(text)} chars (~{est_tokens(text)} tokens), num_ctx={a.num_ctx}", file=sys.stderr)
+    if len(text.strip()) < 200:
+        sys.exit("almost no text extracted (scanned PDF?) -- try --images with a vision model")
+    imgs = render_pages(a.doc, a.images) if a.images else None
+
+    budget = a.num_ctx - a.max_out - est_tokens(instr) - 500
+    if est_tokens(text) <= budget:
+        review = chat(f"{instr}\n\n--- DOCUMENT ---\n{text}", imgs, num_ctx=a.num_ctx, num_predict=a.max_out)
+    else:
+        parts = chunk(text, budget)
+        print(f"[review] too long for one pass: {len(parts)} chunks", file=sys.stderr)
+        partial = [chat(f"{instr}\n\nThis is part {i}/{len(parts)} of the document; review only this part.\n\n"
+                        f"--- DOCUMENT PART {i} ---\n{p}", imgs if i == 1 else None,
+                        num_ctx=a.num_ctx, num_predict=a.max_out)
+                   for i, p in enumerate(parts, 1)]
+        review = merge_reviews(partial, instr, a.num_ctx, a.max_out)
+    open(a.out, "w").write(review + "\n")
+    print(f"[review] wrote {a.out}", file=sys.stderr)

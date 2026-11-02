@@ -1,0 +1,7 @@
+runs/
+logs/*
+!logs/.gitkeep
+prompts.jsonl
+results.jsonl
+*.pdf
+__pycache__/

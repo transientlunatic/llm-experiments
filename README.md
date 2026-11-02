@@ -44,3 +44,20 @@ Batch jobs exit on their own when the command finishes.
   ~8B models at Q4 fit anywhere, 30B+ need a 24 GB card or more.
 - `request_disk` must cover model weights in the cache if the node has little `/tmp` space.
 - Untested on the cluster. The bundled CUDA libraries must be compatible with the worker's NVIDIA driver.
+
+## Multi-referee review (planner + DAG)
+```bash
+bin/plan_review.py 2401.08709 --n 3 --vram 23000     # paper: .pdf, .tex, .txt or an arXiv source tarball
+cd runs/2401.08709 && condor_submit_dag -f review.dag
+```
+`plan_review.py` cleans the document once (LaTeX: inlines `\input`s, strips comments, bibliography, TikZ
+and the author block), estimates its size, and picks a **panel from `config/models.json`**:
+models that fit the `--vram` budget at the context needed, from *different families* where possible,
+preferring single-pass reading over chunking, each given a different focus (statistics / novelty /
+technical correctness). It prints the plan and writes a DAG: referees run in parallel on separate GPUs,
+then an **editor** node (a DAG FINAL node, so it still runs if a referee fails) writes `report.md`:
+verdict, consensus, disagreements, a prioritised action list tagged by referee, and all referee reports.
+- `--vram 31000` also allows the 5090 and bigger models; `--submit` submits straight away.
+- Edit `config/models.json` (sizes/quality are rough estimates; check tags exist with the Ollama library).
+- Logs and server logs land in `runs/<name>/logs/`; reports in `runs/<name>/reviews/` and `report.md`.
+- Untested on the cluster: DAG semantics (`FINAL`, `transfer_output_remaps`, directory transfer) are the thing to check first.

@@ -10,7 +10,7 @@ NUM_CTX     = 32768
 universe                = vanilla
 executable              = bin/job.sh
 arguments               = $(MODEL) python3 review_pdf.py $Fnx(PDF) --prompt review.txt --out review.md --num-ctx $(NUM_CTX)
-transfer_input_files    = client/review_pdf.py, prompts/review.txt, $(PDF)
+transfer_input_files    = client/review_pdf.py, client/doc.py, client/oclient.py, prompts/review.txt, $(PDF)
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 
