@@ -13,6 +13,17 @@ condor_submit ollama.sub          # edit MODEL / MIN_VRAM_MB at the top
 `bin/job.sh MODEL CMD...` starts `ollama serve` on a random free port, pulls the model, runs
 `CMD` with `OLLAMA_HOST` and `OLLAMA_MODEL` set, then shuts the server down.
 
+## Review a PDF
+```bash
+condor_submit review.sub PDF=paper.pdf MODEL=llama3.1:8b     # result: review.md
+```
+`client/review_pdf.py` extracts text (`pdftotext`, else `pypdf`), sets a large `num_ctx`
+(Ollama's default silently truncates long input), and map-reduces over chunks if the paper doesn't fit.
+Edit `prompts/review.txt` to change what is asked. Tips:
+- Text/`.tex` input also works; arXiv LaTeX source handles equations much better than PDF text.
+- Scanned PDFs or figures: add `--images 5` and use a vision model (e.g. `qwen2.5vl`); needs `pdftoppm` on the worker.
+- Reviews from 8B models are shallow; try a 30B+ model on the 24/32 GB cards.
+
 ## Interactive
 ```bash
 condor_submit serve.sub
