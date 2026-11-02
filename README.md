@@ -1,9 +1,11 @@
 # llm-experiments
 
-Run local LLMs (Ollama) as HTCondor GPU jobs, with no shared filesystem needed.
+Run local LLMs (Ollama) as HTCondor GPU jobs, with no root, containers or shared filesystem.
 
-Each worker pulls the Ollama Apptainer image and model weights into a **node-local cache**
+Each worker downloads the standalone Ollama release and the model weights into a **node-local cache**
 (`/tmp/$USER-llm-cache`, override with `LLM_CACHE`), so only the first job per node is slow.
+Workers need outbound internet, `curl`, `python3` and `flock`; `zstd` is optional (falls back to `pip install --user zstandard`).
+Pin a release with `OLLAMA_VERSION=v0.x.y`, or use a local install with `OLLAMA_BIN=$(which ollama)` (e.g. laptop minicondor).
 
 ## Batch
 ```bash
@@ -41,4 +43,4 @@ Batch jobs exit on their own when the command finishes.
 - Pool GPUs: 24 GB (3090/4090), 32 GB (5090), 10.6 GB (2080 Ti). Use `MIN_VRAM_MB` to pick;
   ~8B models at Q4 fit anywhere, 30B+ need a 24 GB card or more.
 - `request_disk` must cover model weights in the cache if the node has little `/tmp` space.
-- Untested on the cluster; first thing to check is that `apptainer` is on workers' PATH.
+- Untested on the cluster. The bundled CUDA libraries must be compatible with the worker's NVIDIA driver.

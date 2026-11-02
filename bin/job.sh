@@ -1,42 +1,58 @@
 #!/usr/bin/env bash
 # Run a command against a temporary Ollama server on a Condor GPU worker.
+# No root, container or shared filesystem needed: the standalone Ollama release is unpacked
+# into a node-local cache that later jobs on the same node reuse.
 #
 # Usage: job.sh MODEL [CMD ARGS...]
-#   MODEL  e.g. llama3.1:8b  (pulled into a node-local cache if absent)
+#   MODEL  e.g. llama3.1:8b  (pulled into the node-local cache if absent)
 #   CMD    run with OLLAMA_HOST / OLLAMA_MODEL set. If omitted (or "serve"),
 #          the server is kept alive until the job ends (interactive use).
 #
-# Env overrides: OLLAMA_IMAGE (default docker://ollama/ollama:latest),
-#                LLM_CACHE (default /tmp/$USER-llm-cache; node-local, reused by later jobs)
+# Env overrides: OLLAMA_VERSION (e.g. v0.12.3; default: latest)
+#                LLM_CACHE      (default /tmp/$USER-llm-cache)
+#                OLLAMA_BIN     (use this ollama binary instead, e.g. on a laptop with ollama installed)
 set -euo pipefail
 
 MODEL="${1:?usage: job.sh MODEL [CMD...]}"; shift || true
-IMAGE="${OLLAMA_IMAGE:-docker://ollama/ollama:latest}"
-CACHE="${LLM_CACHE:-/tmp/${USER:-$(id -un)}-llm-cache}"
+CACHE="${LLM_CACHE:-/tmp/$(id -un)-llm-cache}"
 SCRATCH="${_CONDOR_SCRATCH_DIR:-$PWD}"
-mkdir -p "$CACHE"/{models,apptainer,tmp}
+VERSION="${OLLAMA_VERSION:-latest}"
+mkdir -p "$CACHE/models" "$SCRATCH/home"
+export HOME="$SCRATCH/home"          # ollama writes its key under $HOME/.ollama
 
-export APPTAINER_CACHEDIR="$CACHE/apptainer" APPTAINER_TMPDIR="$CACHE/tmp"
-SIF="$CACHE/ollama-$(echo "$IMAGE" | tr -c 'A-Za-z0-9\n' _).sif"
-
-# Fetch the image once per node; flock stops concurrent jobs racing.
-(
-  flock 9
-  if [ ! -f "$SIF" ]; then
-    rm -f "$SIF.part"
-    apptainer pull "$SIF.part" "$IMAGE" >&2
-    mv -f "$SIF.part" "$SIF"
+if [ -n "${OLLAMA_BIN:-}" ]; then
+  BIN="$OLLAMA_BIN"
+else
+  DIR="$CACHE/ollama-$VERSION"
+  BIN="$DIR/bin/ollama"
+  if [ "$VERSION" = latest ]; then
+    URL="https://ollama.com/download/ollama-linux-amd64.tar.zst"
+  else
+    URL="https://github.com/ollama/ollama/releases/download/$VERSION/ollama-linux-amd64.tar.zst"
   fi
-) 9>"$CACHE/image.lock"
+  (
+    flock 9   # concurrent jobs on one node wait here rather than racing the download
+    if [ ! -x "$BIN" ]; then
+      echo "[job] installing ollama ($VERSION) into $DIR" >&2
+      rm -rf "$DIR.part"; mkdir -p "$DIR.part"
+      if command -v zstd >/dev/null; then
+        curl -fsSL "$URL" | zstd -dc | tar -x -C "$DIR.part"
+      else
+        python3 -m pip install --user -q zstandard >&2
+        curl -fsSL "$URL" | python3 -c '
+import sys, zstandard
+zstandard.ZstdDecompressor().copy_stream(sys.stdin.buffer, sys.stdout.buffer)' | tar -x -C "$DIR.part"
+      fi
+      mv "$DIR.part" "$DIR"
+    fi
+  ) 9>"$CACHE/install.lock"
+fi
 
 PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("",0));print(s.getsockname()[1])')
-export OLLAMA_HOST="127.0.0.1:$PORT" OLLAMA_MODEL="$MODEL"
-# --writable-tmpfs: ollama wants a writable $HOME; --nv exposes the GPU.
-AP=(apptainer exec --nv --writable-tmpfs --bind "$CACHE/models:/models"
-    --env OLLAMA_MODELS=/models --env OLLAMA_HOST="$OLLAMA_HOST" "$SIF")
+export OLLAMA_HOST="127.0.0.1:$PORT" OLLAMA_MODEL="$MODEL" OLLAMA_MODELS="$CACHE/models"
 
 echo "[job] host=$(hostname -f) port=$PORT model=$MODEL gpu=${CUDA_VISIBLE_DEVICES:-?}" >&2
-"${AP[@]}" ollama serve >"$SCRATCH/ollama-server.log" 2>&1 &
+"$BIN" serve >"$SCRATCH/ollama-server.log" 2>&1 &
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null || true; wait $SERVER 2>/dev/null || true' EXIT
 
@@ -46,8 +62,8 @@ for _ in $(seq 120); do
   sleep 1
 done
 
-# Per-model lock so concurrent jobs on one node don't pull the same weights twice.
-( flock 8; "${AP[@]}" ollama pull "$MODEL" >&2 ) 8>"$CACHE/pull.lock"
+# Lock so concurrent jobs on one node don't pull the same weights twice.
+( flock 8; "$BIN" pull "$MODEL" >&2 ) 8>"$CACHE/pull.lock"
 
 if [ $# -eq 0 ] || [ "$1" = serve ]; then
   echo "[job] serving on worker localhost:$PORT -- from submit host: condor_ssh_to_job -ssh \"ssh -L 11434:127.0.0.1:$PORT\" ${CONDOR_JOB_ID:-<jobid>}" >&2
