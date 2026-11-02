@@ -16,9 +16,15 @@ condor_submit ollama.sub          # edit MODEL / MIN_VRAM_MB at the top
 ## Interactive
 ```bash
 condor_submit serve.sub
-condor_tail -stderr <jobid>       # prints host:port and an ssh tunnel hint
-ssh -L 11434:<worker>:<port> <submit-host>   # then OLLAMA_HOST=localhost:11434 ollama run ...
+condor_tail -stderr <jobid>       # prints the port once the model is loaded
+# on the submit host (leave running):
+condor_ssh_to_job -ssh "ssh -L 11434:127.0.0.1:<port>" <jobid>
+# then, on the submit host (or via a second -L hop from your laptop):
+OLLAMA_HOST=127.0.0.1:11434 ollama run llama3.1:8b
 ```
+The server only listens on the worker's localhost (it has no authentication), hence the tunnel.
+The job removes itself after 4 h (`periodic_remove` in `serve.sub`); `condor_rm <jobid>` ends it sooner.
+Batch jobs exit on their own when the command finishes.
 
 ## Notes
 - Pool GPUs: 24 GB (3090/4090), 32 GB (5090), 10.6 GB (2080 Ti). Use `MIN_VRAM_MB` to pick;

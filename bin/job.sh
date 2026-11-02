@@ -50,7 +50,7 @@ done
 ( flock 8; "${AP[@]}" ollama pull "$MODEL" >&2 ) 8>"$CACHE/pull.lock"
 
 if [ $# -eq 0 ] || [ "$1" = serve ]; then
-  echo "[job] serving at $(hostname -f):$PORT -- tunnel: ssh -L 11434:$(hostname -f):$PORT <submit-host>" >&2
+  echo "[job] serving on worker localhost:$PORT -- from submit host: condor_ssh_to_job -ssh \"ssh -L 11434:127.0.0.1:$PORT\" ${CONDOR_JOB_ID:-<jobid>}" >&2
   wait $SERVER
 else
   "$@"
