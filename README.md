@@ -60,6 +60,15 @@ with `--appendix drop`; the task is restated after the document ("review the sci
 supplementary"); and claim checking is capped at about a quarter citation claims. Sizing and chunking use the main text
 only. The appendix heading detection is a heuristic for PDFs -- check the plan's "appendix" token count.
 
+**Context overflow (per-model tokenizers):** tokenizers differ a lot on LaTeX/maths, and Ollama silently drops tokens near
+the *start* of a prompt that exceeds `num_ctx`, so the model would see only the tail of the paper and none of its
+instructions or stance. Each job therefore measures its own model's chars-per-token on a sample of the paper and sizes
+everything from that; it checks the server's prompt-token count against what it sent (a full window, or far fewer tokens than
+sent, means overflow); on overflow it falls back to chunked reading with progressively smaller chunks, and if that still fails
+the review is prefixed with a visible warning. The referee's stance is restated *after* the document, with the task. To check a
+run: `grep -i "calibration\|overflow\|likely truncated" runs/<name>/logs/referee_*.err` and `grep -i trunc
+runs/<name>/logs/ollama-server_*.log`.
+
 **REF ratings:** each review ends with a `REF_ASSESSMENT` block (originality / significance / rigour on 0-4, and a
 probability distribution over 4*/3*/2*/1*/U). The editor step parses these and computes, in code, a per-referee table, the
 panel mixture and an expected-stars model x stance matrix (`report.md`). LLM ratings are poorly calibrated -- read the

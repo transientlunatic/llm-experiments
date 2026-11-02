@@ -16,7 +16,7 @@ failure here never blocks the referees; the findings file then says verification
 """
 import argparse, json, re, sys, traceback
 from doc import chunk, est_tokens, split_main_appendix
-from oclient import chat_messages
+from oclient import calibrate_tokens, chat_messages
 from sandbox import Sandbox, SandboxError
 
 # ------------------------------------------------------------------ tools (all run in sandbox.py workers)
@@ -195,6 +195,7 @@ if __name__ == "__main__":
         tools = Tools(text, refs, sb)
         results = []
         main_text, _ = split_main_appendix(text)       # claims come from the main text; tools can search everything
+        calibrate_tokens(main_text, a.num_ctx)
         for n, c in enumerate(extract_claims(main_text, a), 1):
             print(f"[claims] verifying {n}: [{c['type']}] {c['quote'][:80]}", file=sys.stderr)
             try:

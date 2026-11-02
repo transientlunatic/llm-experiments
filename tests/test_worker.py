@@ -8,6 +8,7 @@ WORKER = Path(__file__).parent.parent / "igor" / "worker"
 sys.path.insert(0, str(WORKER))
 import claims  # noqa: E402
 import doc  # noqa: E402
+import oclient  # noqa: E402
 import review_pdf  # noqa: E402
 
 DATA = WORKER.parent / "data" / "prompts"
@@ -17,14 +18,20 @@ BLOCK = ("REF_ASSESSMENT\noriginality: 3\nsignificance: 2\nrigour: 3\n"
 
 class Stub:
     """Records every model call; behaviour is configured per test."""
-    def __init__(self, truncate_review=False, rating_replies=None):
+    def __init__(self, truncate_review=False, rating_replies=None, real_cpt=3.5, report=None):
+        """real_cpt: this 'model's' true chars per token. report(label, expected_tokens, num_ctx) may override the
+        token count the 'server' reports (to simulate overflow / front truncation)."""
         self.calls, self.truncate_review = [], truncate_review
         self.rating_replies = list(rating_replies or [BLOCK])
+        self.real_cpt, self.report = real_cpt, report
 
     def chat_meta(self, content, images=None, *, num_ctx, num_predict=3000, temperature=0.2, label=""):
         self.calls.append({"label": label, "num_predict": num_predict, "prompt": content})
         truncated = self.truncate_review and label == "review"
-        return {"text": f"[{label} text]", "truncated": truncated}
+        used = int(len(content) / self.real_cpt) + 30
+        if self.report:
+            used = self.report(label, used, num_ctx)
+        return {"text": f"[{label} text]", "truncated": truncated, "prompt_tokens": used}
 
     def chat(self, content, images=None, *, num_ctx, num_predict=3000, temperature=0.2, label=""):
         self.calls.append({"label": label, "num_predict": num_predict, "prompt": content})
@@ -39,16 +46,18 @@ class ReviewRunTest(unittest.TestCase):
         self.ref = DATA / "ref_rating.txt"
         self.focus = self.dir / "f.txt"; self.focus.write_text("Stance: grumpy.")
         self.out = self.dir / "r.md"
-        self._orig = (review_pdf.chat, review_pdf.chat_meta)
+        self._orig = (review_pdf.chat, review_pdf.chat_meta, oclient.chat_meta, doc.TOK_CHARS)
+        oclient._CAL["done"] = False
 
     def tearDown(self):
-        review_pdf.chat, review_pdf.chat_meta = self._orig
+        review_pdf.chat, review_pdf.chat_meta, oclient.chat_meta, doc.TOK_CHARS = self._orig
+        oclient._CAL["done"] = False
         self.tmp.cleanup()
 
-    def run_review(self, stub, text, num_ctx=32768, max_out=2500):
-        review_pdf.chat, review_pdf.chat_meta = stub.chat, stub.chat_meta
+    def run_review(self, stub, text, num_ctx=32768, max_out=2500, calibrate=False):
+        review_pdf.chat, review_pdf.chat_meta, oclient.chat_meta = stub.chat, stub.chat_meta, stub.chat_meta
         review_pdf.run("doc.txt", str(self.prompt), str(self.focus), None, str(self.out), num_ctx, max_out,
-                       text=text, ref_prompt=str(self.ref))
+                       text=text, ref_prompt=str(self.ref), calibrate=calibrate)
         return self.out.read_text()
 
     def test_rating_is_a_separate_call_and_is_appended(self):
@@ -144,7 +153,8 @@ class AppendixTest(ReviewRunTest):
         self.run_review(stub, self.doc_text(), num_ctx=32768)
         prompt = stub.calls[0]["prompt"]
         self.assertTrue(prompt.index("--- MAIN TEXT ---") < prompt.index(review_pdf.APP_HEAD) < prompt.index("--- END OF DOCUMENT ---"))
-        self.assertTrue(prompt.rstrip().endswith(review_pdf.REMINDER))                  # task restated last
+        self.assertTrue(prompt.rstrip().endswith("Stance: grumpy."))                     # stance + task come LAST
+        self.assertIn(review_pdf.REMINDER, prompt)
         self.assertIn("Do not review the reference list", prompt)
 
     def test_appendix_is_truncated_or_omitted_to_protect_the_main_text(self):
@@ -165,7 +175,61 @@ class AppendixTest(ReviewRunTest):
         for c in chunks:
             self.assertNotIn("lemma", c["prompt"])
             self.assertIn("appendices are omitted", c["prompt"])
-            self.assertTrue(c["prompt"].rstrip().endswith(review_pdf.REMINDER))
+            self.assertTrue(c["prompt"].rstrip().endswith("Stance: grumpy."))
+            self.assertIn(review_pdf.REMINDER, c["prompt"])
+
+
+class OverflowTest(ReviewRunTest):
+    """A model whose tokenizer is less efficient than we assume must not silently lose the start of the prompt."""
+    TEXT = "\n\n".join("Section %d. " % i + "alpha beta gamma delta " * 60 for i in range(10))     # ~ 14.6k chars
+
+    def test_calibration_measures_the_models_real_tokenizer(self):
+        stub = Stub(real_cpt=2.0)
+        self.run_review(stub, self.TEXT * 3, num_ctx=32768, calibrate=True)
+        self.assertEqual(stub.calls[0]["label"], "calibrate")
+        self.assertEqual(stub.calls[0]["num_predict"], 1)
+        self.assertAlmostEqual(doc.TOK_CHARS, 2.0 * 0.92, delta=0.05)           # 8% safety margin below the measurement
+
+    def test_inefficient_tokenizer_makes_a_borderline_paper_chunked(self):
+        num_ctx = 8192
+        ok = Stub(real_cpt=3.5)                                                  # fits in one pass at 3.5 chars/token
+        self.run_review(ok, self.TEXT, num_ctx=num_ctx, calibrate=True)
+        self.assertIn("review", [c["label"] for c in ok.calls])
+        oclient._CAL["done"] = False
+        doc.TOK_CHARS = 3.5
+        bad = Stub(real_cpt=1.7)                                                 # LaTeX-heavy tokenizer: would overflow
+        self.run_review(bad, self.TEXT, num_ctx=num_ctx, calibrate=True)
+        labels = [c["label"] for c in bad.calls]
+        self.assertNotIn("review", labels)                                       # never sent as one oversized prompt
+        self.assertTrue(any(l.startswith("chunk") for l in labels))
+        for c in bad.calls:                                                      # and no prompt exceeds the real window
+            if c["label"].startswith("chunk"):
+                self.assertLess(len(c["prompt"]) / 1.7, num_ctx - 2500)
+
+    def test_front_truncation_is_detected_and_recovered(self):
+        # the server reports far fewer tokens than we sent, as when Ollama drops the start of a long prompt
+        stub = Stub(report=lambda label, used, ctx: used // 2 if label == "review" else used)
+        out = self.run_review(stub, "word " * 4300, num_ctx=10000)      # fits one pass by our estimate
+        labels = [c["label"] for c in stub.calls]
+        self.assertEqual(labels[0], "review")
+        self.assertTrue(any(l.startswith("chunk") for l in labels))              # fell back to chunked reading
+        self.assertNotIn("WARNING: the input still exceeded", out)
+
+    def test_persistent_overflow_shrinks_chunks_then_flags_the_review(self):
+        stub = Stub(report=lambda label, used, ctx: ctx if label.startswith("chunk") else used)
+        out = self.run_review(stub, "word " * 6000, num_ctx=8192)
+        sizes = []
+        for c in stub.calls:
+            if c["label"].startswith("chunk 1/"):
+                sizes.append(len(c["prompt"]))
+        self.assertGreater(len(sizes), 2)                                        # retried several times
+        self.assertTrue(out.startswith("[WARNING: the input still exceeded"))    # and says so, loudly
+        self.assertIn("overall_distribution", out)                               # rating still produced
+
+    def test_stance_is_restated_last_even_when_front_is_lost(self):
+        stub = Stub()
+        self.run_review(stub, "word " * 400)
+        self.assertTrue(stub.calls[0]["prompt"].rstrip().endswith("Stance: grumpy."))
 
 
 class ClaimSelectionTest(unittest.TestCase):
