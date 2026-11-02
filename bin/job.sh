@@ -15,6 +15,7 @@ set -euo pipefail
 
 MODEL="${1:?usage: job.sh MODEL [CMD...]}"; shift || true
 CACHE="${LLM_CACHE:-/tmp/$(id -un)-llm-cache}"
+export LLM_CACHE="$CACHE"   # so client scripts share the same node-local cache
 SCRATCH="${_CONDOR_SCRATCH_DIR:-$PWD}"
 VERSION="${OLLAMA_VERSION:-latest}"
 mkdir -p "$CACHE/models" "$SCRATCH/home"

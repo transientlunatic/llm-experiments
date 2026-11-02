@@ -10,18 +10,33 @@ reviewed, then the partial reviews are merged in a final pass.
 """
 import argparse, base64, glob, json, os, re, shutil, subprocess, sys, tempfile, urllib.request
 
+def import_pypdf():
+    """Import pypdf, installing it into the node-local cache (pip --target) if needed.
+    --target avoids PEP 668 'externally-managed-environment' errors on system Pythons."""
+    import importlib
+    lib = os.path.join(os.environ.get("LLM_CACHE", f"/tmp/{os.environ.get('USER') or subprocess.getoutput('id -un')}-llm-cache"), "pylib")
+    sys.path.insert(0, lib)
+    try:
+        import pypdf
+    except ImportError:
+        print(f"[review] no pdftotext; installing pypdf into {lib}", file=sys.stderr)
+        py = shutil.which("python3") or sys.executable or "python3"
+        for extra in ([], ["--break-system-packages"]):
+            if subprocess.run([py, "-m", "pip", "install", "-q", "--target", lib, *extra, "pypdf"]).returncode == 0:
+                break
+        else:
+            sys.exit("could not install pypdf; run pdftotext on the submit host and pass the .txt instead")
+        importlib.invalidate_caches()
+        import pypdf
+    return pypdf
+
 def extract_text(path):
     if path.endswith((".txt", ".tex", ".md")):
         return open(path, errors="replace").read()
     if shutil.which("pdftotext"):
         return subprocess.run(["pdftotext", "-layout", path, "-"], check=True,
                               capture_output=True, text=True).stdout
-    try:
-        import pypdf
-    except ImportError:
-        print("[review] no pdftotext; installing pypdf --user", file=sys.stderr)
-        subprocess.run([sys.executable, "-m", "pip", "install", "--user", "-q", "pypdf"], check=True)
-        import pypdf
+    pypdf = import_pypdf()
     return "\n\n".join(p.extract_text() or "" for p in pypdf.PdfReader(path).pages)
 
 def render_pages(path, n):
