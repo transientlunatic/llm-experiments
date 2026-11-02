@@ -30,6 +30,19 @@ FOCI = [
 ]
 
 
+PERSONAS = {
+    "neutral": ("neutral", "Stance: neutral and even-handed. Weigh strengths and weaknesses equally."),
+    "hostile": ("hostile", "Stance: a blunt, sceptical, antagonistic referee (the proverbial 'Reviewer 2'). Look hard for "
+                "flaws, overclaiming and gaps, and do not soften your criticism. But you are honest: every criticism "
+                "must quote or point to the specific text, and you must not invent flaws. Rate conservatively."),
+    "supportive": ("supportive", "Stance: a constructive, sympathetic referee who looks for what is valuable and how "
+                   "weaknesses could be fixed. You are still honest: do not overlook real problems."),
+    "pedantic": ("pedantic", "Stance: a meticulous pedant. Check definitions, notation, units, numbers, references and "
+                 "internal consistency line by line, and list every discrepancy you find with a quote."),
+}
+DEFAULT_PERSONAS = ["neutral", "hostile", "supportive", "pedantic"]
+
+
 def vram_need(m, ctx):
     return (m["weights_mb"] + m["kv_mb_per_1k"] * ctx / 1000 + OVERHEAD_MB) * 1.1
 
@@ -58,6 +71,8 @@ def main():
     ap.add_argument("doc"); ap.add_argument("--name"); ap.add_argument("--n", type=int, default=3)
     ap.add_argument("--vram", type=int, default=23000, help="max GPU memory per job in MB (24 GB cards: 23000; 5090: 31000)")
     ap.add_argument("--ctx-cap", type=int, default=32768)
+    ap.add_argument("--personas", default=",".join(DEFAULT_PERSONAS),
+                    help="comma list from: " + ", ".join(PERSONAS) + " (cycled over referees)")
     ap.add_argument("--catalog", default=os.path.join(ROOT, "config", "models.json"))
     ap.add_argument("--prompt", default=os.path.join(ROOT, "prompts", "review.txt"))
     ap.add_argument("--raw", action="store_true", help="don't clean LaTeX")
@@ -97,9 +112,12 @@ def main():
     referees = []
     for i, (m, mode, ctx) in enumerate(panel, 1):
         short, focus = FOCI[(i - 1) % len(FOCI)]
+        pkeys = a.personas.split(",")
+        pshort, ptext = PERSONAS[pkeys[(i - 1) % len(pkeys)].strip()]
         referees.append({"id": i, "model": m["name"], "family": m["family"], "mode": mode, "ctx": ctx,
                          "vram_req_mb": min(a.vram, math.ceil(vram_need(m, ctx) / 1000) * 1000),
-                         "weights_mb": m["weights_mb"], "focus_short": short, "focus": focus})
+                         "weights_mb": m["weights_mb"], "focus_short": short, "focus": focus,
+                         "persona": pshort, "persona_text": ptext})
 
     # Editor: needs all reviews in one window; best model that can do that in a single pass.
     ed_tokens = len(referees) * OUT_RESERVE + 2000
@@ -128,7 +146,7 @@ log                     = logs/nodes.log
     dag = []
     for r in referees:
         i = r["id"]
-        open(os.path.join(run, f"focus_{i}.txt"), "w").write(r["focus"] + "\n")
+        open(os.path.join(run, f"focus_{i}.txt"), "w").write(r["persona_text"] + "\n\n" + r["focus"] + "\n")
         open(os.path.join(run, f"referee_{i}.sub"), "w").write(common + f"""arguments               = {r['model']} python3 {py.format(i=i, ctx=r['ctx'])}
 transfer_input_files    = {ROOT}/client/review_pdf.py, {ROOT}/client/doc.py, {ROOT}/client/oclient.py, {a.prompt}, doc.txt, focus_{i}.txt
 transfer_output_remaps  = "review_{i}.md = reviews/review_{i}.md; ollama-server.log = logs/ollama-server_{i}.log"
@@ -152,9 +170,9 @@ queue
     open(os.path.join(run, "review.dag"), "w").write("\n".join(dag) + "\n")
 
     print(f"\nDocument: ~{tokens} tokens   GPU budget: {a.vram} MB   run dir: {run}\n")
-    print(f"{'role':<10}{'model':<18}{'family':<9}{'ctx':>6}  {'mode':<8}{'VRAM req':>9}  focus")
+    print(f"{'role':<10}{'model':<18}{'family':<9}{'ctx':>6}  {'mode':<8}{'VRAM req':>9}  persona / focus")
     for r in referees:
-        print(f"{'referee ' + str(r['id']):<10}{r['model']:<18}{r['family']:<9}{r['ctx']:>6}  {r['mode']:<8}{r['vram_req_mb']:>8}M  {r['focus_short']}")
+        print(f"{'referee ' + str(r['id']):<10}{r['model']:<18}{r['family']:<9}{r['ctx']:>6}  {r['mode']:<8}{r['vram_req_mb']:>8}M  {r['persona']} / {r['focus_short']}")
     print(f"{'editor':<10}{editor['model']:<18}{'':<9}{editor['ctx']:>6}  {editor['mode']:<8}{editor['vram_req_mb']:>8}M")
     if any(r["mode"] == "chunked" for r in referees):
         print("\nNote: 'chunked' referees read the paper in pieces and merge -- expect weaker reviews.")

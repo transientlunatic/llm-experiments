@@ -6,4 +6,5 @@ Write a report with these sections:
 3. **Disagreements** -- where referees contradict each other, and which view seems better supported by what they quote.
 4. **Action list** -- a prioritised checklist for the authors: *Must fix*, *Should fix*, *Optional*. Tag every item with the referees who raised it, e.g. [R1, R3]. Mark items raised by only one referee as *(single referee, unverified)*.
 5. **Caveats** -- anything in the reports that looks like a hallucination or an artefact of garbled text extraction (equations, tables).
+Referees were told to adopt different stances (neutral / hostile / supportive / pedantic): discount tone and weigh only the evidence they quote. A REF star-rating table computed from their ratings is provided for context; refer to it in the Verdict but do not alter or invent numbers.
 Be concise and specific; do not invent issues that no referee raised.

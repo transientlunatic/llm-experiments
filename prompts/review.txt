@@ -5,3 +5,16 @@ You are a careful, constructive referee. Review the paper below.
 3. List the main weaknesses and any unsupported claims, quoting the relevant passage.
 4. List specific, actionable suggestions.
 Be specific and cite sections. If something is unclear because the text extraction looks garbled (equations, tables), say so rather than guessing.
+
+Finally, give an estimated REF (UK Research Excellence Framework) assessment of the paper as a research output.
+Criteria: originality, significance, rigour. Star levels: 4* world-leading; 3* internationally excellent;
+2* recognised internationally; 1* recognised nationally; U below that standard.
+End your review with EXACTLY this block (integers 0-4 per criterion, 0 meaning U; the overall distribution is
+your probability, in percent, that the paper would be graded at each level, summing to 100):
+
+REF_ASSESSMENT
+originality: <0-4>
+significance: <0-4>
+rigour: <0-4>
+overall_distribution: 4*=<p>, 3*=<p>, 2*=<p>, 1*=<p>, U=<p>
+

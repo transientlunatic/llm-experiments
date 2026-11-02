@@ -61,3 +61,12 @@ verdict, consensus, disagreements, a prioritised action list tagged by referee, 
 - Edit `config/models.json` (sizes/quality are rough estimates; check tags exist with the Ollama library).
 - Logs and server logs land in `runs/<name>/logs/`; reports in `runs/<name>/reviews/` and `report.md`.
 - Untested on the cluster: DAG semantics (`FINAL`, `transfer_output_remaps`, directory transfer) are the thing to check first.
+
+### Personas and REF ratings
+Each referee gets a stance (default order: `neutral, hostile, supportive, pedantic`, cycled) on top of its
+focus; choose with `--personas hostile,hostile,neutral`. The hostile stance must back every criticism with
+a quote and may not invent flaws. Every review ends with a `REF_ASSESSMENT` block (originality / significance /
+rigour on 0-4, plus a probability distribution over 4*/3*/2*/1*/U). `editor.py` parses these and computes the
+rating table and an equal-weight mixture in code (the editor model does not write the numbers); see
+"Estimated REF ratings" in `report.md`. LLM ratings are poorly calibrated -- read the spread, not the mean.
+The rubric lives in `prompts/review.txt` (REF 2021 criteria; edit it if you want different ones).
