@@ -77,3 +77,28 @@ Rubric: `prompts/review.txt` (REF 2021 criteria).
 
 Notes: logs in `runs/<name>/logs/`, reviews in `runs/<name>/reviews/`, final `report.md` in the run dir. The DAG mechanics
 (`FINAL`, POST script, `transfer_output_remaps`, directory transfer) are untested on a real pool -- check those first.
+
+## Tool sandboxing
+Tool calls never run model-written code, and each one runs in its own short-lived subprocess (`client/sandbox.py`,
+workers in `client/tools.py`):
+- **Least privilege by construction:** the calculator is a restricted AST evaluator; `lookup_reference` takes a *cite key
+  only*, resolved against the paper's own bibliography, so the model cannot choose text to send to Crossref/arXiv; each
+  worker is handed only the data its tool needs (the lookup worker sees one bibliography entry, never the paper).
+- **OS isolation per call:** `python -I -S -B`, scrubbed environment (no `HOME`, tokens or credentials), empty working
+  directory, rlimits (CPU, memory, no file writes, no forking), hard timeout, output cap.
+- **Namespaces (self-tested at start-up):** user + mount namespaces with a `chroot` into a tiny tmpfs root (interpreter and
+  libraries only -- no home, no job directory, no `/etc`, no paper), plus a network namespace for offline tools (no network
+  at all). The lookup worker keeps the host network but sees no files; it may only reach `api.crossref.org` and
+  `export.arxiv.org` over https, refuses redirects, caps response size and refuses XML with DTDs/entities.
+- **`--sandbox strict` (default)** refuses to run any tool unless the namespace stack works on that node (then the claims
+  stage reports itself unavailable and referees run without findings). `--sandbox best-effort` accepts rlimits-only.
+  `--no-network` disables lookups entirely, so no tool touches the network. The achieved level is printed in the job log
+  and in the findings header.
+- **Prompt injection:** the paper, tool output and referee reports are labelled untrusted data in every prompt. Tools have no
+  side effects, so the worst case is a skewed verdict.
+
+Known limits: binaries under the bound `/usr` can still be executed inside the sandbox (they have no files, network or
+credentials to work with); the no-fork limit relies on `RLIMIT_NPROC`, which does not apply to a root user (couldn't be
+demonstrated in the development sandbox); the sandbox protects the *tools*, not the Ollama server itself or the
+Condor job as a whole; and the lookups reveal your paper's reference list (not its text) to Crossref/arXiv -- use `--no-network`
+for confidential manuscripts if even that matters.

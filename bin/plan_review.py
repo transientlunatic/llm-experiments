@@ -69,6 +69,9 @@ def main():
     ap.add_argument("--split", action="store_true", help="one DAG node per (model, persona)")
     ap.add_argument("--no-claims", action="store_true", help="skip claim extraction/verification")
     ap.add_argument("--max-claims", type=int, default=15)
+    ap.add_argument("--sandbox", choices=["strict", "best-effort"], default="strict",
+                    help="strict (default): claim tools refuse to run unless user+net+mount namespaces work on the node")
+    ap.add_argument("--no-network", action="store_true", help="disable reference lookups (no tool touches the network)")
     ap.add_argument("--catalog", default=os.path.join(ROOT, "config", "models.json"))
     ap.add_argument("--prompt", default=os.path.join(ROOT, "prompts", "review.txt"))
     ap.add_argument("--raw", action="store_true", help="don't clean LaTeX")
@@ -163,8 +166,8 @@ log                     = logs/nodes.log
     prompt_name = os.path.basename(a.prompt)
     dag = []
     if claims:
-        open(os.path.join(run, "claims.sub"), "w").write(common + f"""arguments               = {claims['model']} python3 claims.py doc.txt --refs refs.txt --num-ctx {claims['ctx']} --max-claims {a.max_claims}
-transfer_input_files    = {ROOT}/client/claims.py, {client}, doc.txt, refs.txt
+        open(os.path.join(run, "claims.sub"), "w").write(common + f"""arguments               = {claims['model']} python3 claims.py doc.txt --refs refs.txt --num-ctx {claims['ctx']} --max-claims {a.max_claims} --sandbox {a.sandbox}{' --no-network' if a.no_network else ''}
+transfer_input_files    = {ROOT}/client/claims.py, {ROOT}/client/sandbox.py, {ROOT}/client/tools.py, {client}, doc.txt, refs.txt
 transfer_output_remaps  = "ollama-server.log = logs/ollama-server_claims.log"
 """ + gpu(claims["weights_mb"], claims["vram_req_mb"]) + """output                  = logs/claims.out
 error                   = logs/claims.err
