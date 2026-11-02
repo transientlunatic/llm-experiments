@@ -15,7 +15,7 @@ Needs a model with tool support (e.g. qwen2.5, llama3.1). Always exits 0 and wri
 failure here never blocks the referees; the findings file then says verification was unavailable.
 """
 import argparse, json, re, sys, traceback
-from doc import chunk, est_tokens
+from doc import chunk, est_tokens, split_main_appendix
 from oclient import chat_messages
 from sandbox import Sandbox, SandboxError
 
@@ -103,9 +103,22 @@ def extract_claims(text, a):
         t = c.get("type") if c.get("type") in ("numerical", "citation", "methodological") else "other"
         imp = c.get("importance") if isinstance(c.get("importance"), (int, float)) else 3
         claims.append({"type": t, "quote": " ".join(c["quote"].split()), "importance": imp})
-    claims.sort(key=lambda c: -c["importance"])
     print(f"[claims] {len(raw)} raw -> {len(claims)} verbatim claims", file=sys.stderr)
-    return claims[:a.max_claims]
+    return select(claims, a.max_claims)
+
+
+def select(claims, k):
+    """Top-k by importance, but at most ~a quarter citation claims so reference checks cannot dominate."""
+    claims = sorted(claims, key=lambda c: -c["importance"])
+    cap, out, ncite = max(2, k // 4), [], 0
+    for c in claims:
+        if c["type"] == "citation":
+            if ncite >= cap:
+                continue
+            ncite += 1
+        if len(out) < k:
+            out.append(c)
+    return out
 
 
 def verify(claim, tools, a):
@@ -181,7 +194,8 @@ if __name__ == "__main__":
         print(f"[claims] sandbox: {sb.level}", file=sys.stderr)
         tools = Tools(text, refs, sb)
         results = []
-        for n, c in enumerate(extract_claims(text, a), 1):
+        main_text, _ = split_main_appendix(text)       # claims come from the main text; tools can search everything
+        for n, c in enumerate(extract_claims(main_text, a), 1):
             print(f"[claims] verifying {n}: [{c['type']}] {c['quote'][:80]}", file=sys.stderr)
             try:
                 results.append(verify(c, tools, a))

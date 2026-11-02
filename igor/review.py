@@ -21,7 +21,7 @@ from .catalog import DATA
 
 WORKER = Path(__file__).parent / "worker"
 sys.path.insert(0, str(WORKER))            # worker scripts are flat, stdlib-only modules; reuse their doc loader
-from doc import est_tokens, load_document_ex  # noqa: E402
+from doc import est_tokens, load_document_ex, split_main_appendix  # noqa: E402
 
 FINDINGS_RESERVE = 3500   # tokens of claim findings added to each referee prompt
 EDITOR_REVIEW_EST = 2000  # typical tokens per referee review fed to the editor
@@ -49,7 +49,7 @@ def _client_files():
 
 def build(doc, *, name=None, out_dir="runs", n=3, personas=DEFAULT_PERSONAS, vram=23000, ctx_cap=32768,
           split=False, claims=True, max_claims=15, sandbox="strict", network=True, catalog=None, prompt=None,
-          raw=False) -> tuple[Path, dict]:
+          raw=False, appendix="separate") -> tuple[Path, dict]:
     """Create the run directory; returns (run_dir, plan)."""
     bad = [p for p in personas if p not in PERSONAS]
     if bad:
@@ -62,12 +62,13 @@ def build(doc, *, name=None, out_dir="runs", n=3, personas=DEFAULT_PERSONAS, vra
     (run / "reviews").mkdir(parents=True, exist_ok=True)
     (run / "logs").mkdir(exist_ok=True)
 
-    text, refs = load_document_ex(str(doc), raw=raw)
+    text, refs = load_document_ex(str(doc), raw=raw, appendix=appendix)
     if len(text.strip()) < 200:
         raise PlanError("almost no text extracted from the document (scanned PDF?)")
     (run / "doc.txt").write_text(text)
     (run / "refs.txt").write_text(refs)
-    tokens = est_tokens(text)
+    main_text, app_text = split_main_appendix(text)
+    tokens = est_tokens(main_text)                # sizing uses the main text; the appendix is added only if it fits
     prompt_tok = est_tokens(prompt.read_text()) + 250        # + REF rubric / persona text
 
     models = cat.load_catalog(catalog)
@@ -111,7 +112,7 @@ def build(doc, *, name=None, out_dir="runs", n=3, personas=DEFAULT_PERSONAS, vra
     editor = {"model": m["name"], "ctx": ctx, "mode": mode, "weights_mb": m["weights_mb"],
               "vram_req_mb": cat.vram_request(m, ctx, vram)}
 
-    plan = {"name": name, "doc_tokens": tokens, "vram_budget_mb": vram, "personas": list(personas),
+    plan = {"name": name, "doc_tokens": tokens, "appendix_tokens": est_tokens(app_text) if app_text else 0, "vram_budget_mb": vram, "personas": list(personas),
             "claims": claims_cfg, "referees": referees, "editor": editor, "warnings": warnings,
             "split": split, "max_claims": max_claims}
     (run / "plan.json").write_text(json.dumps(plan, indent=2))
@@ -158,7 +159,10 @@ def build(doc, *, name=None, out_dir="runs", n=3, personas=DEFAULT_PERSONAS, vra
 
 def render(plan: dict) -> str:
     """Human-readable summary of a plan."""
-    o = [f"Document: ~{plan['doc_tokens']} tokens   GPU budget: {plan['vram_budget_mb']} MB", ""]
+    app = plan.get("appendix_tokens", 0)
+    o = [f"Document: ~{plan['doc_tokens']} tokens of main text"
+         + (f" + ~{app} tokens of appendix (supplementary: included only if it fits)" if app else " (no appendix detected)")
+         + f"   GPU budget: {plan['vram_budget_mb']} MB", ""]
     if plan["claims"]:
         c = plan["claims"]
         o.append(f"claims  {c['model']}  (tool use; ctx {c['ctx']}, <= {plan['max_claims']} claims; referees wait for it)")

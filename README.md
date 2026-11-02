@@ -52,6 +52,14 @@ non-existent citations stand out). Findings go into every referee prompt and the
 script never fails the workflow: if it produces nothing, the referees run without findings. Empirical claims
 (convergence, figure contents) are mostly "unverifiable" without data or code.
 
+**Keeping referees on the science:** long-context models over-weight whatever is at the end of the prompt, which is
+usually the appendix and the references. So: the reference list is cut from the reviewed text (it stays available to the
+citation tool); appendices (LaTeX `\appendix`, or an `Appendix` / `Supplementary material` heading in PDF text) are
+supplementary: shown after the main text, labelled, and only as far as they fit (never during chunked reading), or removed
+with `--appendix drop`; the task is restated after the document ("review the science, not the references; appendices are
+supplementary"); and claim checking is capped at about a quarter citation claims. Sizing and chunking use the main text
+only. The appendix heading detection is a heuristic for PDFs -- check the plan's "appendix" token count.
+
 **REF ratings:** each review ends with a `REF_ASSESSMENT` block (originality / significance / rigour on 0-4, and a
 probability distribution over 4*/3*/2*/1*/U). The editor step parses these and computes, in code, a per-referee table, the
 panel mixture and an expected-stars model x stance matrix (`report.md`). LLM ratings are poorly calibrated -- read the

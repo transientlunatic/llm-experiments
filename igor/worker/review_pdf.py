@@ -8,10 +8,15 @@ in the context window it is split into chunks, each is reviewed, and the partial
 merged (in several stages if they don't fit in one window either).
 """
 import argparse, base64, glob, os, shutil, subprocess, sys, tempfile
-from doc import load_document, est_tokens, chunk, TOK_CHARS
+from doc import load_document, est_tokens, chunk, split_main_appendix, TOK_CHARS
 from oclient import chat, chat_meta
 
 
+REMINDER = ("Reminder of the task: review the SCIENCE of the main text. Do not review the reference list or the formatting "
+            "of citations, and do not review the appendices in their own right (they are supplementary: consult them only "
+            "to check claims made in the main text). Prioritise the most important points; at most about 800 words.")
+APP_HEAD = ("--- SUPPLEMENTARY APPENDIX (consult only to check claims in the main text; do not review it in its own "
+            "right) ---")
 TRUNC = "\n\n[review cut off at the output-length limit]"
 PARTIAL_OUT = 1200           # tokens for each chunk's brief partial review
 
@@ -82,28 +87,40 @@ def run(doc, prompt, focus_file=None, evidence=None, out="review.md", num_ctx=32
         instr += "\n\n" + stance
     if evidence and os.path.exists(evidence) and os.path.getsize(evidence) > 0:
         instr += ("\n\nAUTOMATED CLAIM-CHECK FINDINGS (produced by tools; they can be wrong, but where relevant "
-                  "discuss them and say whether you agree):\n" + open(evidence).read().strip())
+                  "discuss them and say whether you agree; citation checks are secondary, so do not let them dominate your "
+                  "review):\n" + open(evidence).read().strip())
     if text is None:
         text = load_document(doc, raw=raw)
     print(f"[review] {len(text)} chars (~{est_tokens(text)} tokens), num_ctx={num_ctx}", file=sys.stderr)
     if len(text.strip()) < 200:
         sys.exit("almost no text extracted (scanned PDF?) -- try --images with a vision model")
     imgs = render_pages(doc, images) if images else None
-    budget = num_ctx - max_out - est_tokens(instr) - 500
-    if est_tokens(text) <= budget:
-        r = chat_meta(f"{instr}\n\n--- DOCUMENT ---\n{text}", imgs, num_ctx=num_ctx, num_predict=max_out, label="review")
+    main, appendix = split_main_appendix(text)
+    budget = num_ctx - max_out - est_tokens(instr) - est_tokens(REMINDER) - 500
+    if est_tokens(main) <= budget:
+        doc_part = f"--- MAIN TEXT ---\n{main}"
+        room = budget - est_tokens(main) - 50
+        if appendix and room > 200:                  # the appendix goes after the main text, only as far as it fits
+            app = appendix if est_tokens(appendix) <= room else appendix[:int(room * TOK_CHARS)] + "\n[appendix truncated]"
+            doc_part += f"\n\n{APP_HEAD}\n{app}"
+        elif appendix:
+            print("[review] appendix omitted: no room in the context window", file=sys.stderr)
+        r = chat_meta(f"{instr}\n\n{doc_part}\n\n--- END OF DOCUMENT ---\n{REMINDER}", imgs, num_ctx=num_ctx,
+                      num_predict=max_out, label="review")
         review = r["text"] + (TRUNC if r["truncated"] else "")
     else:
-        parts = chunk(text, budget)
-        print(f"[review] too long for one pass ({est_tokens(text)} tokens > {budget} available): {len(parts)} chunks", file=sys.stderr)
-        brief = ("\n\nThis is part {i}/{n} of the document. Review only this part, as BRIEF bullet points "
-                 "(at most 300 words): key strengths, weaknesses and unsupported claims, each with a short quote. "
-                 "A merge step follows, so do not write a full review and do not give a star rating.")
+        parts = chunk(main, budget)
+        print(f"[review] main text too long for one pass ({est_tokens(main)} tokens > {budget} available): "
+              f"{len(parts)} chunks" + ("; appendix not reviewed" if appendix else ""), file=sys.stderr)
+        brief = ("\n\nThis is part {i}/{n} of the main text" + (" (appendices are omitted from this reading)" if appendix else "") +
+                 ". Review only this part, as BRIEF bullet points (at most 300 words): key strengths, weaknesses and "
+                 "unsupported claims, each with a short quote. A merge step follows, so do not write a full review and "
+                 "do not give a star rating.")
         partial = []
         for i, p in enumerate(parts, 1):
-            r = chat_meta(f"{instr}{brief.format(i=i, n=len(parts))}\n\n--- DOCUMENT PART {i} ---\n{p}",
-                          imgs if i == 1 else None, num_ctx=num_ctx, num_predict=min(max_out, PARTIAL_OUT),
-                          label=f"chunk {i}/{len(parts)}")
+            r = chat_meta(f"{instr}{brief.format(i=i, n=len(parts))}\n\n--- MAIN TEXT, PART {i} ---\n{p}\n\n"
+                          f"--- END OF PART ---\n{REMINDER}", imgs if i == 1 else None, num_ctx=num_ctx,
+                          num_predict=min(max_out, PARTIAL_OUT), label=f"chunk {i}/{len(parts)}")
             partial.append(r["text"] + (TRUNC if r["truncated"] else ""))
         review = merge_reviews(partial, instr, num_ctx, max_out)
     if ref_prompt:

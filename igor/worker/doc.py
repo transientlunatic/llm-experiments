@@ -4,6 +4,26 @@ gzip, and arXiv-style .tar.gz source bundles (with or without extension)."""
 import gzip, os, re, shutil, subprocess, sys, tarfile, tempfile
 
 TOK_CHARS = 3.5          # conservative chars-per-token for prose + LaTeX
+APPENDIX_MARK = "=== APPENDIX (supplementary material) ==="
+
+
+def split_main_appendix(text):
+    """(main text, appendix text); the appendix is whatever follows APPENDIX_MARK."""
+    i = text.find(APPENDIX_MARK)
+    if i < 0:
+        return text, ""
+    return text[:i].rstrip(), text[i + len(APPENDIX_MARK):].strip()
+
+
+def mark_appendix_plain(text):
+    """Heuristic for PDF/plain text: the first short heading-like line 'Appendix[ A][: title]' / 'Appendices' /
+    'Supplementary material', and not in the first 3000 characters (title, abstract, contents). Long appendices can be most of a paper."""
+    pat = (r"(?im)^[ \t]*(?:appendices|appendix(?:[ \t]+[A-Z0-9]{1,3})?|supplementary (?:material|information))"
+           r"(?:[ \t]*[.:\-\u2013][ \t]*[^\n]{0,60})?[ \t]*$")
+    for m in re.finditer(pat, text):
+        if m.start() > 3000:             # skip title/abstract/contents lines near the top
+            return text[:m.start()] + APPENDIX_MARK + "\n" + text[m.start():]
+    return text
 
 
 def est_tokens(text):
@@ -87,6 +107,7 @@ def clean_latex(text):
     macros = [l.strip() for l in pre.splitlines()
               if re.match(r"\\(newcommand|renewcommand|def|DeclareMathOperator)\b", l.strip()) and len(l) < 200][:60]
     body = body.split("\\end{document}")[0]
+    body = re.sub(r"\\appendix\b|\\begin\{appendices\}", "\n" + APPENDIX_MARK + "\n", body, count=1)
     body = re.sub(r"\\begin\{thebibliography\}.*?\\end\{thebibliography\}", "", body, flags=re.S)
     body = re.sub(r"\\(bibliography|bibliographystyle)\s*\{[^}]*\}", "", body)
     body = re.sub(r"\\begin\{(tikzpicture|pgfpicture|axis)\}.*?\\end\{\1\}", "", body, flags=re.S)
@@ -169,14 +190,23 @@ def load_document(path, raw=False):
     return load_document_ex(path, raw)[0]
 
 
-def load_document_ex(path, raw=False):
-    """Return (clean_text, references_text). references_text may be empty."""
+def _finish(text, appendix):
+    """appendix='drop' removes the appendix from the text altogether; 'separate' keeps it after APPENDIX_MARK."""
+    return split_main_appendix(text)[0] if appendix == "drop" else text
+
+
+def load_document_ex(path, raw=False, appendix="separate"):
+    """Return (clean_text, references_text). references_text may be empty. The text has the appendix (if any)
+    after APPENDIX_MARK so consumers can treat it as supplementary."""
     with open(path, "rb") as f:
         head = f.read(4)
     roots, text = [os.path.dirname(os.path.abspath(path))], None
     if head == b"%PDF" or path.lower().endswith(".pdf"):
         t = pdf_text(path)
-        return t, _pdf_refs(t)
+        refs = _pdf_refs(t)
+        if refs:                                    # the reference list is for the citation tool, not the referees
+            t = t[:len(t) - len(refs)].rstrip()
+        return _finish(mark_appendix_plain(t), appendix), refs
     refs = ""
     if tarfile.is_tarfile(path):
         d = tempfile.mkdtemp()
@@ -190,9 +220,12 @@ def load_document_ex(path, raw=False):
     else:
         text = open(path, errors="replace").read()
     if raw or not ("\\documentclass" in text or "\\begin{document}" in text):
-        return text, refs or _pdf_refs(text)
+        r = refs or _pdf_refs(text)
+        if r and text.endswith(r):
+            text = text[:len(text) - len(r)].rstrip()
+        return _finish(mark_appendix_plain(text), appendix), r
     full = inline_inputs(strip_comments(text), roots)
-    return clean_latex(full), refs or _tex_refs(full, roots[0])
+    return _finish(clean_latex(full), appendix), refs or _tex_refs(full, roots[0])
 
 
 def chunk(text, budget_tokens):

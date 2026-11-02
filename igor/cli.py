@@ -67,6 +67,8 @@ def review_options(f):
         click.option("--catalog", type=click.Path(exists=True), help="model catalogue JSON (default: built in)"),
         click.option("--prompt", type=click.Path(exists=True), help="review prompt file (default: built in)"),
         click.option("--raw", is_flag=True, help="do not clean LaTeX source"),
+        click.option("--appendix", type=click.Choice(["separate", "drop"]), default="separate", show_default=True,
+                     help="separate: appendices are supplementary, shown to referees only if they fit; drop: remove them"),
     ]
     for o in reversed(opts):
         f = o(f)
@@ -77,7 +79,7 @@ def _build_review(doc, **o):
     run, plan = rv.build(doc, name=o["name"], out_dir=o["out_dir"], n=o["n"], personas=o["personas"], vram=o["vram"],
                          ctx_cap=o["ctx_cap"], split=o["split"], claims=o["claims"], max_claims=o["max_claims"],
                          sandbox=o["sandbox"], network=o["network"], catalog=o["catalog"], prompt=o["prompt"],
-                         raw=o["raw"])
+                         raw=o["raw"], appendix=o["appendix"])
     click.echo("\n" + rv.render(plan) + f"\n\nRun directory: {run}")
     return run
 
@@ -259,7 +261,7 @@ def connect(jobid, local_port, dry_run):
 def models(vram, tokens, doc, ctx_cap, catalog):
     """List the model catalogue and how each model fits the GPU budget (for a document, if given)."""
     if doc:
-        tokens = rv.est_tokens(rv.load_document_ex(doc)[0])
+        tokens = rv.est_tokens(rv.split_main_appendix(rv.load_document_ex(doc)[0])[0])
     ms = cat.load_catalog(catalog)
     click.echo(f"GPU budget {vram} MB" + (f", document ~{tokens} tokens" if tokens else "") + "\n")
     click.echo(f"{'model':<18}{'family':<9}{'tools':<6}{'weights':>8}{'quality':>8}   fit")

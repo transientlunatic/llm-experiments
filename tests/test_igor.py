@@ -64,6 +64,17 @@ class CliTest(unittest.TestCase):
                     if f.startswith("/"):
                         self.assertTrue(Path(f).exists(), f)
 
+    def test_planner_sizes_on_main_text_and_reports_appendix(self):
+        Path("app.txt").write_text(PAPER + "\n\nAppendix A: Details\n" + "extra proof detail " * 5000)
+        r = self.invoke("review", "build", "app.txt", "--no-claims")
+        plan = json.loads(Path("runs/app/plan.json").read_text())
+        self.assertGreater(plan["appendix_tokens"], 10000)
+        self.assertLess(plan["doc_tokens"], 5000)                         # main text only
+        self.assertIn("appendix (supplementary", r.output)
+        self.invoke("review", "build", "app.txt", "--no-claims", "--appendix", "drop", "--name", "app2")
+        self.assertEqual(json.loads(Path("runs/app2/plan.json").read_text())["appendix_tokens"], 0)
+        self.assertNotIn("extra proof", Path("runs/app2/doc.txt").read_text())
+
     def test_review_options(self):
         self.invoke("review", "build", "paper.txt", "--name", "x", "--no-claims", "--split",
                     "--personas", "hostile,pedantic", "-n", "2", "--out-dir", "out", "--no-network")
